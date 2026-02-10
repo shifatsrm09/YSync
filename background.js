@@ -1,4 +1,6 @@
-console.log("[WATCH-PARTY] Background service worker started");
+console.log("[YSync] Background started");
+
+let sessionVideoId = null;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
 
@@ -6,13 +8,26 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
     const senderTabId = sender.tab.id;
 
+    // Initialize session video
+    if (!sessionVideoId) {
+        sessionVideoId = message.videoId;
+        console.log("[YSync] Session video set:", sessionVideoId);
+    }
+
+    // Reject mismatched videos
+    if (message.videoId !== sessionVideoId) {
+        console.log("[YSync] Ignored event from mismatched video");
+        return;
+    }
+
     chrome.tabs.query({}, (tabs) => {
 
-        tabs.forEach((tab) => {
+        tabs.forEach(tab => {
 
-            // Don't send message back to sender
             if (tab.id !== senderTabId) {
+
                 chrome.tabs.sendMessage(tab.id, message);
+
             }
 
         });

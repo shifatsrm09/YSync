@@ -1,4 +1,4 @@
-console.log("[WATCH-PARTY] Content script loaded");
+console.log("[YSync] Content script loaded");
 
 let videoFound = false;
 let isRemoteAction = false;
@@ -7,14 +7,22 @@ function getVideo() {
     return document.querySelector("video");
 }
 
+function getYouTubeVideoId() {
+    const url = new URL(window.location.href);
+    return url.searchParams.get("v");
+}
+
 function waitForVideo() {
+
     const interval = setInterval(() => {
 
         const video = getVideo();
 
         if (video && !videoFound) {
             videoFound = true;
-            console.log("[WATCH-PARTY] Video detected");
+
+            console.log("[YSync] Video detected");
+
             attachVideoListeners(video);
             clearInterval(interval);
         }
@@ -27,52 +35,52 @@ function attachVideoListeners(video) {
     video.addEventListener("play", () => {
         if (isRemoteAction) return;
 
-        console.log("[WATCH-PARTY] PLAY detected (local)");
-        chrome.runtime.sendMessage({ type: "PLAY" });
+        chrome.runtime.sendMessage({
+            type: "PLAY",
+            videoId: getYouTubeVideoId()
+        });
     });
 
     video.addEventListener("pause", () => {
         if (isRemoteAction) return;
 
-        console.log("[WATCH-PARTY] PAUSE detected (local)");
-        chrome.runtime.sendMessage({ type: "PAUSE" });
+        chrome.runtime.sendMessage({
+            type: "PAUSE",
+            videoId: getYouTubeVideoId()
+        });
     });
 
-    // SEEK detection
     video.addEventListener("seeked", () => {
         if (isRemoteAction) return;
 
-        console.log("[WATCH-PARTY] SEEK detected (local)", video.currentTime);
-
         chrome.runtime.sendMessage({
             type: "SEEK",
-            time: video.currentTime
+            time: video.currentTime,
+            videoId: getYouTubeVideoId()
         });
     });
 }
 
-// Receive messages from background
+
+// Receive remote commands
 chrome.runtime.onMessage.addListener((message) => {
 
     const video = getVideo();
     if (!video) return;
 
+    // Ignore if video mismatch
+    if (message.videoId !== getYouTubeVideoId()) {
+        console.log("[YSync] Video mismatch. Ignoring sync.");
+        return;
+    }
+
     isRemoteAction = true;
 
-    if (message.type === "PLAY") {
-        console.log("[WATCH-PARTY] PLAY applied (remote)");
-        video.play();
-    }
+    if (message.type === "PLAY") video.play();
 
-    if (message.type === "PAUSE") {
-        console.log("[WATCH-PARTY] PAUSE applied (remote)");
-        video.pause();
-    }
+    if (message.type === "PAUSE") video.pause();
 
-    if (message.type === "SEEK") {
-        console.log("[WATCH-PARTY] SEEK applied (remote)", message.time);
-        video.currentTime = message.time;
-    }
+    if (message.type === "SEEK") video.currentTime = message.time;
 
     setTimeout(() => {
         isRemoteAction = false;
