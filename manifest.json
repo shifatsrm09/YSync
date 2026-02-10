@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Watch Party Prototype",
+  "version": "1.0",
+  "description": "Detect video events for watch party prototype",
+
+  "permissions": ["tabs"],
+
+  "host_permissions": ["<all_urls>"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["contentScript.js"]
+    }
+  ]
+}
