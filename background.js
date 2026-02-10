@@ -1,37 +1,107 @@
 console.log("[YSync] Background started");
 
-let sessionVideoId = null;
+function generateCode() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+}
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    if (!sender.tab) return;
+    (async () => {
 
-    const senderTabId = sender.tab.id;
+        let { sessions = {}, activeSession = null } =
+            await chrome.storage.local.get(["sessions", "activeSession"]);
 
-    // Initialize session video
-    if (!sessionVideoId) {
-        sessionVideoId = message.videoId;
-        console.log("[YSync] Session video set:", sessionVideoId);
-    }
+        // ---------- CREATE SESSION ----------
+        if (message.type === "CREATE_SESSION") {
 
-    // Reject mismatched videos
-    if (message.videoId !== sessionVideoId) {
-        console.log("[YSync] Ignored event from mismatched video");
-        return;
-    }
+            const code = generateCode();
 
-    chrome.tabs.query({}, (tabs) => {
+            sessions[code] = { videoId: message.videoId };
 
-        tabs.forEach(tab => {
+            activeSession = {
+                code,
+                videoId: message.videoId
+            };
 
-            if (tab.id !== senderTabId) {
+            await chrome.storage.local.set({ sessions, activeSession });
 
-                chrome.tabs.sendMessage(tab.id, message);
+            sendResponse({ code });
+            return;
+        }
 
+        // ---------- JOIN SESSION ----------
+        if (message.type === "JOIN_SESSION") {
+
+            const session = sessions[message.code];
+
+            if (!session) {
+                sendResponse({ error: "Session not found" });
+                return;
             }
+
+            if (session.videoId !== message.videoId) {
+                sendResponse({ error: "Video mismatch" });
+                return;
+            }
+
+            activeSession = {
+                code: message.code,
+                videoId: message.videoId
+            };
+
+            await chrome.storage.local.set({ activeSession });
+
+            sendResponse({ joined: true });
+            return;
+        }
+
+        // ---------- LEAVE SESSION ----------
+        if (message.type === "LEAVE_SESSION") {
+
+            await chrome.storage.local.remove("activeSession");
+
+            sendResponse({ left: true });
+            return;
+        }
+
+        // ---------- GET SESSION ----------
+        if (message.type === "GET_SESSION") {
+            sendResponse(activeSession);
+            return;
+        }
+
+        // ---------- SYNC EVENTS ----------
+        if (!activeSession) return;
+        if (!sender.tab) return;
+
+        // Only allow sender if video matches session video
+        if (message.videoId !== activeSession.videoId) return;
+
+        chrome.tabs.query({}, tabs => {
+
+            tabs.forEach(tab => {
+
+                if (tab.id === sender.tab.id) return;
+
+                chrome.tabs.sendMessage(
+                    tab.id,
+                    { type: "YSYNC_PING" },
+                    response => {
+
+                        if (!response) return;
+
+                        if (response.videoId === activeSession.videoId) {
+                            chrome.tabs.sendMessage(tab.id, message);
+                        }
+
+                    }
+                );
+
+            });
 
         });
 
-    });
+    })();
 
+    return true;
 });

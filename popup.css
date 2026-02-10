@@ -1,0 +1,83 @@
+body {
+  width: 250px;
+  background: #0f0f0f;
+  color: #e6e6e6;
+  font-family: system-ui, sans-serif;
+  padding: 12px;
+}
+
+h1 {
+  font-size: 18px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+/* Status Card */
+#status {
+  background: #181818;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 10px;
+  border: 1px solid #262626;
+}
+
+/* Buttons */
+button {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px;
+  background: #1e1e1e;
+  color: white;
+  border: 1px solid #2f2f2f;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+button:hover {
+  background: #2a2a2a;
+  border-color: #3d3d3d;
+}
+
+/* Primary Button Accent */
+#create {
+  border-color: #3a6df0;
+}
+
+#create:hover {
+  background: #2a3f7a;
+}
+
+/* Join Panel */
+#joinPanel {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #252525;
+}
+
+.hidden {
+  display: none;
+}
+
+/* Input Field */
+input {
+  width: 100%;
+  padding: 7px;
+  margin-top: 6px;
+  border-radius: 6px;
+  border: 1px solid #2a2a2a;
+  background: #181818;
+  color: white;
+  font-size: 13px;
+}
+
+input:focus {
+  outline: none;
+  border-color: #3a6df0;
+}
+
+/* Secondary Buttons */
+#cancelJoin {
+  background: #151515;
+}

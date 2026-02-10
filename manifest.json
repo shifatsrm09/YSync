@@ -2,11 +2,11 @@
   "manifest_version": 3,
   "name": "YSync",
   "version": "1.0",
-  "description": "Detect video events for watch party prototype",
+  "description": "YouTube Watch Together (Local Session)",
 
-  "permissions": ["tabs"],
+  "permissions": ["tabs", "storage"],
 
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": ["https://www.youtube.com/*"],
 
   "background": {
     "service_worker": "background.js"
@@ -14,8 +14,12 @@
 
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["https://www.youtube.com/*"],
       "js": ["contentScript.js"]
     }
-  ]
+  ],
+
+  "action": {
+    "default_popup": "popup.html"
+  }
 }

@@ -1,4 +1,4 @@
-console.log("[YSync] Content script loaded");
+console.log("[YSync] Content loaded");
 
 let videoFound = false;
 let isRemoteAction = false;
@@ -7,37 +7,19 @@ function getVideo() {
     return document.querySelector("video");
 }
 
-function getYouTubeVideoId() {
-    const url = new URL(window.location.href);
+function getVideoId() {
+    const url = new URL(location.href);
     return url.searchParams.get("v");
 }
 
-function waitForVideo() {
-
-    const interval = setInterval(() => {
-
-        const video = getVideo();
-
-        if (video && !videoFound) {
-            videoFound = true;
-
-            console.log("[YSync] Video detected");
-
-            attachVideoListeners(video);
-            clearInterval(interval);
-        }
-
-    }, 1000);
-}
-
-function attachVideoListeners(video) {
+function attach(video) {
 
     video.addEventListener("play", () => {
         if (isRemoteAction) return;
 
         chrome.runtime.sendMessage({
             type: "PLAY",
-            videoId: getYouTubeVideoId()
+            videoId: getVideoId()
         });
     });
 
@@ -46,7 +28,7 @@ function attachVideoListeners(video) {
 
         chrome.runtime.sendMessage({
             type: "PAUSE",
-            videoId: getYouTubeVideoId()
+            videoId: getVideoId()
         });
     });
 
@@ -56,35 +38,42 @@ function attachVideoListeners(video) {
         chrome.runtime.sendMessage({
             type: "SEEK",
             time: video.currentTime,
-            videoId: getYouTubeVideoId()
+            videoId: getVideoId()
         });
     });
 }
 
 
-// Receive remote commands
-chrome.runtime.onMessage.addListener((message) => {
+// ---------- MESSAGE HANDLING ----------
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+    // Used by background to check video match
+    if (message.type === "YSYNC_PING") {
+        sendResponse({ videoId: getVideoId() });
+        return;
+    }
 
     const video = getVideo();
     if (!video) return;
 
-    // Ignore if video mismatch
-    if (message.videoId !== getYouTubeVideoId()) {
-        console.log("[YSync] Video mismatch. Ignoring sync.");
-        return;
-    }
+    if (message.videoId !== getVideoId()) return;
 
     isRemoteAction = true;
 
     if (message.type === "PLAY") video.play();
-
     if (message.type === "PAUSE") video.pause();
-
     if (message.type === "SEEK") video.currentTime = message.time;
 
-    setTimeout(() => {
-        isRemoteAction = false;
-    }, 150);
+    setTimeout(() => isRemoteAction = false, 150);
 });
 
-waitForVideo();
+
+// ---------- VIDEO DETECTION ----------
+const wait = setInterval(() => {
+    const v = getVideo();
+    if (v && !videoFound) {
+        videoFound = true;
+        attach(v);
+        clearInterval(wait);
+    }
+}, 1000);
