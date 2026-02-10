@@ -1,7 +1,7 @@
 console.log("[YSync] Content loaded");
 
 let videoFound = false;
-let isRemoteAction = false;
+let isRemote = false;
 
 function getVideo() {
     return document.querySelector("video");
@@ -15,7 +15,7 @@ function getVideoId() {
 function attach(video) {
 
     video.addEventListener("play", () => {
-        if (isRemoteAction) return;
+        if (isRemote) return;
 
         chrome.runtime.sendMessage({
             type: "PLAY",
@@ -24,7 +24,7 @@ function attach(video) {
     });
 
     video.addEventListener("pause", () => {
-        if (isRemoteAction) return;
+        if (isRemote) return;
 
         chrome.runtime.sendMessage({
             type: "PAUSE",
@@ -33,7 +33,7 @@ function attach(video) {
     });
 
     video.addEventListener("seeked", () => {
-        if (isRemoteAction) return;
+        if (isRemote) return;
 
         chrome.runtime.sendMessage({
             type: "SEEK",
@@ -43,32 +43,22 @@ function attach(video) {
     });
 }
 
-
-// ---------- MESSAGE HANDLING ----------
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-
-    // Used by background to check video match
-    if (message.type === "YSYNC_PING") {
-        sendResponse({ videoId: getVideoId() });
-        return;
-    }
+chrome.runtime.onMessage.addListener(message => {
 
     const video = getVideo();
     if (!video) return;
 
     if (message.videoId !== getVideoId()) return;
 
-    isRemoteAction = true;
+    isRemote = true;
 
     if (message.type === "PLAY") video.play();
     if (message.type === "PAUSE") video.pause();
     if (message.type === "SEEK") video.currentTime = message.time;
 
-    setTimeout(() => isRemoteAction = false, 150);
+    setTimeout(() => isRemote = false, 150);
 });
 
-
-// ---------- VIDEO DETECTION ----------
 const wait = setInterval(() => {
     const v = getVideo();
     if (v && !videoFound) {

@@ -1,107 +1,114 @@
-console.log("[YSync] Background started");
+let socket = null;
+let activeSession = null;
 
-function generateCode() {
-    return Math.floor(1000 + Math.random() * 9000).toString();
+
+// Restore session
+chrome.storage.local.get("activeSession", data => {
+    if (data.activeSession) {
+        activeSession = data.activeSession;
+        connect();
+    }
+});
+
+function clearSession() {
+    activeSession = null;
+    chrome.storage.local.remove("activeSession");
+
+    chrome.runtime.sendMessage({
+        type: "SESSION_TERMINATED"
+    });
 }
+
+function connect() {
+
+    if (socket && socket.readyState === WebSocket.OPEN) return;
+
+    socket = new WebSocket("ws://localhost:3000");
+
+    socket.onmessage = event => {
+
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
+
+            activeSession = { code: msg.room };
+            chrome.storage.local.set({ activeSession });
+
+            chrome.runtime.sendMessage({
+                type: "SESSION_CONFIRMED",
+                code: msg.room
+            });
+        }
+
+        if (msg.type === "ROOM_CLOSED") {
+            clearSession();
+        }
+
+        if (msg.type === "ERROR") {
+
+            chrome.runtime.sendMessage({
+                type: "SESSION_ERROR",
+                error: msg.error
+            });
+        }
+    };
+}
+
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    (async () => {
+    // CREATE
+    if (message.type === "CREATE_SESSION") {
 
-        let { sessions = {}, activeSession = null } =
-            await chrome.storage.local.get(["sessions", "activeSession"]);
+        connect();
 
-        // ---------- CREATE SESSION ----------
-        if (message.type === "CREATE_SESSION") {
+        const room = Math.floor(1000 + Math.random() * 9000).toString();
 
-            const code = generateCode();
+        socket.addEventListener("open", () => {
+            socket.send(JSON.stringify({
+                type: "CREATE_ROOM",
+                room
+            }));
+        }, { once: true });
 
-            sessions[code] = { videoId: message.videoId };
+        sendResponse({ code: room });
+        return true;
+    }
 
-            activeSession = {
-                code,
-                videoId: message.videoId
-            };
 
-            await chrome.storage.local.set({ sessions, activeSession });
+    // JOIN
+    if (message.type === "JOIN_SESSION") {
 
-            sendResponse({ code });
-            return;
-        }
+        connect();
 
-        // ---------- JOIN SESSION ----------
-        if (message.type === "JOIN_SESSION") {
+        socket.addEventListener("open", () => {
+            socket.send(JSON.stringify({
+                type: "JOIN_ROOM",
+                room: message.code
+            }));
+        }, { once: true });
 
-            const session = sessions[message.code];
+        sendResponse({ joining: true });
+        return true;
+    }
 
-            if (!session) {
-                sendResponse({ error: "Session not found" });
-                return;
-            }
 
-            if (session.videoId !== message.videoId) {
-                sendResponse({ error: "Video mismatch" });
-                return;
-            }
+    // LEAVE
+    if (message.type === "LEAVE_SESSION") {
 
-            activeSession = {
-                code: message.code,
-                videoId: message.videoId
-            };
+        if (socket) socket.close();
 
-            await chrome.storage.local.set({ activeSession });
+        socket = null;
+        clearSession();
 
-            sendResponse({ joined: true });
-            return;
-        }
+        sendResponse({ left: true });
+        return true;
+    }
 
-        // ---------- LEAVE SESSION ----------
-        if (message.type === "LEAVE_SESSION") {
 
-            await chrome.storage.local.remove("activeSession");
-
-            sendResponse({ left: true });
-            return;
-        }
-
-        // ---------- GET SESSION ----------
-        if (message.type === "GET_SESSION") {
-            sendResponse(activeSession);
-            return;
-        }
-
-        // ---------- SYNC EVENTS ----------
-        if (!activeSession) return;
-        if (!sender.tab) return;
-
-        // Only allow sender if video matches session video
-        if (message.videoId !== activeSession.videoId) return;
-
-        chrome.tabs.query({}, tabs => {
-
-            tabs.forEach(tab => {
-
-                if (tab.id === sender.tab.id) return;
-
-                chrome.tabs.sendMessage(
-                    tab.id,
-                    { type: "YSYNC_PING" },
-                    response => {
-
-                        if (!response) return;
-
-                        if (response.videoId === activeSession.videoId) {
-                            chrome.tabs.sendMessage(tab.id, message);
-                        }
-
-                    }
-                );
-
-            });
-
-        });
-
-    })();
-
-    return true;
+    // GET SESSION
+    if (message.type === "GET_SESSION") {
+        sendResponse(activeSession);
+        return true;
+    }
 });
