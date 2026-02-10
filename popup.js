@@ -26,6 +26,18 @@ function hideJoinPanel() {
     codeInput.value = "";
 }
 
+// Get YouTube video ID from active tab
+function getVideoId(callback) {
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+        try {
+            const url = new URL(tabs[0].url);
+            callback(url.searchParams.get("v"));
+        } catch {
+            callback(null);
+        }
+    });
+}
+
 
 // ---------- LOAD SESSION ----------
 chrome.runtime.sendMessage({ type: "GET_SESSION" }, session => {
@@ -39,24 +51,39 @@ chrome.runtime.sendMessage({ type: "GET_SESSION" }, session => {
 });
 
 
-// ---------- CREATE ----------
+// ---------- CREATE SESSION ----------
 createBtn.onclick = () => {
 
     hideJoinPanel();
 
-    chrome.runtime.sendMessage({ type: "CREATE_SESSION" }, res => {
+    getVideoId(videoId => {
 
-        if (!res?.code) {
-            setStatus("Failed to create session", "#f44336");
+        if (!videoId) {
+            setStatus("Open a YouTube video first", "#f44336");
             return;
         }
 
-        setStatus("Creating session " + res.code);
+        chrome.runtime.sendMessage(
+            {
+                type: "CREATE_SESSION",
+                videoId
+            },
+            res => {
+
+                if (!res?.code) {
+                    setStatus("Failed to create session", "#f44336");
+                    return;
+                }
+
+                setStatus("Creating session " + res.code);
+            }
+        );
+
     });
 };
 
 
-// ---------- OPEN JOIN ----------
+// ---------- OPEN JOIN PANEL ----------
 joinBtn.onclick = () => {
     showJoinPanel();
 };
@@ -72,11 +99,24 @@ confirmJoin.onclick = () => {
         return;
     }
 
-    chrome.runtime.sendMessage({
-        type: "JOIN_SESSION",
-        code
-    }, () => {
-        setStatus("Joining session...");
+    getVideoId(videoId => {
+
+        if (!videoId) {
+            setStatus("Open the same YouTube video", "#f44336");
+            return;
+        }
+
+        chrome.runtime.sendMessage(
+            {
+                type: "JOIN_SESSION",
+                code,
+                videoId
+            },
+            () => {
+                setStatus("Joining session...");
+            }
+        );
+
     });
 };
 
@@ -87,7 +127,7 @@ cancelJoin.onclick = () => {
 };
 
 
-// ---------- LEAVE ----------
+// ---------- LEAVE SESSION ----------
 leaveBtn.onclick = () => {
 
     chrome.runtime.sendMessage({ type: "LEAVE_SESSION" }, () => {
@@ -97,7 +137,7 @@ leaveBtn.onclick = () => {
 };
 
 
-// ---------- SERVER / BACKGROUND EVENTS ----------
+// ---------- BACKGROUND / SERVER EVENTS ----------
 chrome.runtime.onMessage.addListener(msg => {
 
     if (msg.type === "SESSION_CONFIRMED") {
@@ -109,7 +149,6 @@ chrome.runtime.onMessage.addListener(msg => {
         setStatus(msg.error, "#f44336");
     }
 
-    // ⭐ NEW: ROOM TERMINATED HANDLING
     if (msg.type === "SESSION_TERMINATED") {
         setStatus("Session ended", "#f44336");
         hideJoinPanel();

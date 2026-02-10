@@ -3,10 +3,7 @@ const WebSocket = require("ws");
 const wss = new WebSocket.Server({ port: 3000 });
 
 const rooms = {};
-
-// ⭐ 10 minutes
 const ROOM_TIMEOUT = 10 * 60 * 1000;
-
 
 wss.on("connection", ws => {
 
@@ -17,9 +14,8 @@ wss.on("connection", ws => {
         // ---------- CREATE ROOM ----------
         if (msg.type === "CREATE_ROOM") {
 
-            if (rooms[msg.room]) return;
-
             rooms[msg.room] = {
+                videoId: msg.videoId,
                 clients: [ws],
                 timeout: null
             };
@@ -28,10 +24,11 @@ wss.on("connection", ws => {
 
             ws.send(JSON.stringify({
                 type: "ROOM_CREATED",
-                room: msg.room
+                room: msg.room,
+                videoId: msg.videoId
             }));
 
-            console.log("Room created:", msg.room);
+            console.log("Room created:", msg.room, msg.videoId);
             return;
         }
 
@@ -48,7 +45,15 @@ wss.on("connection", ws => {
                 return;
             }
 
-            // Cancel scheduled deletion
+            // ⭐ VIDEO CHECK
+            if (room.videoId !== msg.videoId) {
+                ws.send(JSON.stringify({
+                    type: "ERROR",
+                    error: "Video mismatch"
+                }));
+                return;
+            }
+
             if (room.timeout) {
                 clearTimeout(room.timeout);
                 room.timeout = null;
@@ -59,13 +64,22 @@ wss.on("connection", ws => {
 
             ws.send(JSON.stringify({
                 type: "JOINED",
-                room: msg.room
+                room: msg.room,
+                videoId: room.videoId
             }));
 
             console.log("Client joined:", msg.room);
         }
-    });
 
+        // ---------- SYNC EVENTS ----------
+        if (!ws.room || !rooms[ws.room]) return;
+
+        rooms[ws.room].clients.forEach(client => {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(msg));
+            }
+        });
+    });
 
     ws.on("close", () => {
 
@@ -75,21 +89,14 @@ wss.on("connection", ws => {
 
         room.clients = room.clients.filter(c => c !== ws);
 
-        // ⭐ If empty → start 10 minute countdown
         if (room.clients.length === 0) {
 
-            console.log("Room empty, starting 10 minute timer:", ws.room);
-
             room.timeout = setTimeout(() => {
-
                 delete rooms[ws.room];
-                console.log("Room deleted after timeout:", ws.room);
-
+                console.log("Room deleted:", ws.room);
             }, ROOM_TIMEOUT);
-
         }
     });
 });
 
-
-console.log("Session server running ws://localhost:3000");
+console.log("YSync server running ✅ on ws://localhost:3000");

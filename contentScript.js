@@ -1,6 +1,3 @@
-console.log("[YSync] Content loaded");
-
-let videoFound = false;
 let isRemote = false;
 
 function getVideo() {
@@ -8,8 +5,7 @@ function getVideo() {
 }
 
 function getVideoId() {
-    const url = new URL(location.href);
-    return url.searchParams.get("v");
+    return new URL(location.href).searchParams.get("v");
 }
 
 function attach(video) {
@@ -43,27 +39,23 @@ function attach(video) {
     });
 }
 
-chrome.runtime.onMessage.addListener(message => {
+chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
     if (!video) return;
 
-    if (message.videoId !== getVideoId()) return;
+    if (msg.videoId !== getVideoId()) return;
 
     isRemote = true;
 
-    if (message.type === "PLAY") video.play();
-    if (message.type === "PAUSE") video.pause();
-    if (message.type === "SEEK") video.currentTime = message.time;
+    if (msg.type === "PLAY") video.play();
+    if (msg.type === "PAUSE") video.pause();
+    if (msg.type === "SEEK") video.currentTime = msg.time;
 
     setTimeout(() => isRemote = false, 150);
 });
 
-const wait = setInterval(() => {
-    const v = getVideo();
-    if (v && !videoFound) {
-        videoFound = true;
-        attach(v);
-        clearInterval(wait);
-    }
+setInterval(() => {
+    const video = getVideo();
+    if (video) attach(video);
 }, 1000);
