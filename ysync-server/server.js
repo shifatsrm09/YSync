@@ -11,7 +11,7 @@ wss.on("connection", ws => {
 
         const msg = JSON.parse(raw);
 
-        // ---------- CREATE ROOM ----------
+        // CREATE ROOM
         if (msg.type === "CREATE_ROOM") {
 
             rooms[msg.room] = {
@@ -28,11 +28,11 @@ wss.on("connection", ws => {
                 videoId: msg.videoId
             }));
 
-            console.log("Room created:", msg.room, msg.videoId);
+            console.log("Room created:", msg.room);
             return;
         }
 
-        // ---------- JOIN ROOM ----------
+        // JOIN ROOM
         if (msg.type === "JOIN_ROOM") {
 
             const room = rooms[msg.room];
@@ -45,7 +45,6 @@ wss.on("connection", ws => {
                 return;
             }
 
-            // ⭐ VIDEO CHECK
             if (room.videoId !== msg.videoId) {
                 ws.send(JSON.stringify({
                     type: "ERROR",
@@ -69,9 +68,10 @@ wss.on("connection", ws => {
             }));
 
             console.log("Client joined:", msg.room);
+            return;
         }
 
-        // ---------- SYNC EVENTS ----------
+        // SYNC EVENTS
         if (!ws.room || !rooms[ws.room]) return;
 
         rooms[ws.room].clients.forEach(client => {
@@ -99,4 +99,4 @@ wss.on("connection", ws => {
     });
 });
 
-console.log("YSync server running ✅ on ws://localhost:3000");
+console.log("YSync server running ws://localhost:3000");

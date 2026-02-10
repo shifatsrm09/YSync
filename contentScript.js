@@ -1,4 +1,7 @@
+console.log("[YSync] Content script loaded");
+
 let isRemote = false;
+let attached = false;
 
 function getVideo() {
     return document.querySelector("video");
@@ -10,8 +13,13 @@ function getVideoId() {
 
 function attach(video) {
 
+    if (attached) return;
+    attached = true;
+
     video.addEventListener("play", () => {
         if (isRemote) return;
+
+        console.log("[YSync] PLAY sent");
 
         chrome.runtime.sendMessage({
             type: "PLAY",
@@ -22,6 +30,8 @@ function attach(video) {
     video.addEventListener("pause", () => {
         if (isRemote) return;
 
+        console.log("[YSync] PAUSE sent");
+
         chrome.runtime.sendMessage({
             type: "PAUSE",
             videoId: getVideoId()
@@ -31,6 +41,8 @@ function attach(video) {
     video.addEventListener("seeked", () => {
         if (isRemote) return;
 
+        console.log("[YSync] SEEK sent");
+
         chrome.runtime.sendMessage({
             type: "SEEK",
             time: video.currentTime,
@@ -39,6 +51,7 @@ function attach(video) {
     });
 }
 
+
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
@@ -46,16 +59,22 @@ chrome.runtime.onMessage.addListener(msg => {
 
     if (msg.videoId !== getVideoId()) return;
 
+    console.log("[YSync] Received", msg.type);
+
     isRemote = true;
 
     if (msg.type === "PLAY") video.play();
     if (msg.type === "PAUSE") video.pause();
     if (msg.type === "SEEK") video.currentTime = msg.time;
 
-    setTimeout(() => isRemote = false, 150);
+    setTimeout(() => isRemote = false, 200);
 });
 
-setInterval(() => {
+
+const observer = setInterval(() => {
     const video = getVideo();
-    if (video) attach(video);
+    if (video) {
+        attach(video);
+        clearInterval(observer);
+    }
 }, 1000);
