@@ -1,7 +1,7 @@
-console.log("[YSync] Content script loaded");
+console.log("[YSync] Content loaded");
 
-let isRemote = false;
-let attached = false;
+let lastRemoteAction = 0;
+const SUPPRESSION_WINDOW = 500; // ms
 
 function getVideo() {
     return document.querySelector("video");
@@ -11,47 +11,54 @@ function getVideoId() {
     return new URL(location.href).searchParams.get("v");
 }
 
+function shouldSuppress() {
+    return Date.now() - lastRemoteAction < SUPPRESSION_WINDOW;
+}
+
 function attach(video) {
 
-    if (attached) return;
-    attached = true;
-
     video.addEventListener("play", () => {
-        if (isRemote) return;
+
+        if (shouldSuppress()) return;
 
         console.log("[YSync] PLAY sent");
 
         chrome.runtime.sendMessage({
             type: "PLAY",
-            videoId: getVideoId()
+            videoId: getVideoId(),
+            time: video.currentTime
         });
     });
 
     video.addEventListener("pause", () => {
-        if (isRemote) return;
+
+        if (shouldSuppress()) return;
 
         console.log("[YSync] PAUSE sent");
 
         chrome.runtime.sendMessage({
             type: "PAUSE",
-            videoId: getVideoId()
+            videoId: getVideoId(),
+            time: video.currentTime
         });
     });
 
     video.addEventListener("seeked", () => {
-        if (isRemote) return;
+
+        if (shouldSuppress()) return;
 
         console.log("[YSync] SEEK sent");
 
         chrome.runtime.sendMessage({
             type: "SEEK",
-            time: video.currentTime,
-            videoId: getVideoId()
+            videoId: getVideoId(),
+            time: video.currentTime
         });
     });
 }
 
 
+// ---------- REMOTE EVENTS ----------
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
@@ -61,16 +68,25 @@ chrome.runtime.onMessage.addListener(msg => {
 
     console.log("[YSync] Received", msg.type);
 
-    isRemote = true;
+    lastRemoteAction = Date.now();
 
-    if (msg.type === "PLAY") video.play();
-    if (msg.type === "PAUSE") video.pause();
-    if (msg.type === "SEEK") video.currentTime = msg.time;
+    if (msg.type === "PLAY") {
+        video.currentTime = msg.time;
+        video.play();
+    }
 
-    setTimeout(() => isRemote = false, 200);
+    if (msg.type === "PAUSE") {
+        video.currentTime = msg.time;
+        video.pause();
+    }
+
+    if (msg.type === "SEEK") {
+        video.currentTime = msg.time;
+    }
 });
 
 
+// ---------- VIDEO DETECTOR ----------
 const observer = setInterval(() => {
     const video = getVideo();
     if (video) {

@@ -1,38 +1,23 @@
 let socket = null;
 let activeSession = null;
-let isConnecting = false;
-
-chrome.storage.local.get("activeSession", data => {
-    if (data.activeSession) {
-        activeSession = data.activeSession;
-        connect();
-    }
-});
 
 function connect() {
 
     if (socket && socket.readyState === WebSocket.OPEN) return;
-    if (isConnecting) return;
-
-    isConnecting = true;
 
     socket = new WebSocket("ws://localhost:3000");
 
     socket.onopen = () => {
-        isConnecting = false;
         console.log("[YSync] Socket connected");
-    };
-
-    socket.onclose = () => {
-        isConnecting = false;
-        console.log("[YSync] Socket closed");
     };
 
     socket.onmessage = event => {
 
         const msg = JSON.parse(event.data);
 
-        // SESSION CONFIRM
+        console.log("[YSync] Server ->", msg.type);
+
+        // SESSION
         if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
 
             activeSession = {
@@ -50,7 +35,17 @@ function connect() {
             return;
         }
 
-        // ERROR
+        if (msg.type === "SESSION_TERMINATED") {
+
+            activeSession = null;
+
+            chrome.runtime.sendMessage({
+                type: "SESSION_TERMINATED"
+            });
+
+            return;
+        }
+
         if (msg.type === "ERROR") {
 
             chrome.runtime.sendMessage({
@@ -61,21 +56,21 @@ function connect() {
             return;
         }
 
-        // ⭐ FORWARD SYNC TO TABS
+        // ⭐ Forward EVERYTHING else to tabs
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
             tabs.forEach(tab => {
-                chrome.tabs.sendMessage(tab.id, msg, () => {});
+                chrome.tabs.sendMessage(tab.id, msg);
             });
         });
     };
 }
 
-function sendWhenReady(payload) {
-
+function send(payload) {
     connect();
 
     const trySend = () => {
-        if (socket && socket.readyState === WebSocket.OPEN) {
+        if (socket.readyState === WebSocket.OPEN) {
+            console.log("[YSync] Sending ->", payload.type);
             socket.send(JSON.stringify(payload));
         } else {
             setTimeout(trySend, 100);
@@ -85,49 +80,45 @@ function sendWhenReady(payload) {
     trySend();
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
-    // CREATE
-    if (message.type === "CREATE_SESSION") {
+    if (msg.type === "CREATE_SESSION") {
 
         const room = Math.floor(1000 + Math.random() * 9000).toString();
 
-        sendWhenReady({
+        send({
             type: "CREATE_ROOM",
             room,
-            videoId: message.videoId
+            videoId: msg.videoId
         });
 
         sendResponse({ code: room });
         return true;
     }
 
-    // JOIN
-    if (message.type === "JOIN_SESSION") {
+    if (msg.type === "JOIN_SESSION") {
 
-        sendWhenReady({
+        send({
             type: "JOIN_ROOM",
-            room: message.code,
-            videoId: message.videoId
+            room: msg.code,
+            videoId: msg.videoId
         });
 
         sendResponse({ joining: true });
         return true;
     }
 
-    // GET SESSION
-    if (message.type === "GET_SESSION") {
+    if (msg.type === "GET_SESSION") {
         sendResponse(activeSession);
         return true;
     }
 
-    // ⭐ SEND SYNC EVENTS TO SERVER
     if (
         socket &&
         socket.readyState === WebSocket.OPEN &&
         activeSession &&
-        ["PLAY", "PAUSE", "SEEK"].includes(message.type)
+        ["PLAY","PAUSE","SEEK"].includes(msg.type)
     ) {
-        socket.send(JSON.stringify(message));
+        send(msg);
     }
 });

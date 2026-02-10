@@ -3,7 +3,6 @@ const WebSocket = require("ws");
 const wss = new WebSocket.Server({ port: 3000 });
 
 const rooms = {};
-const ROOM_TIMEOUT = 10 * 60 * 1000;
 
 wss.on("connection", ws => {
 
@@ -11,16 +10,17 @@ wss.on("connection", ws => {
 
         const msg = JSON.parse(raw);
 
-        // CREATE ROOM
+        // CREATE
         if (msg.type === "CREATE_ROOM") {
 
             rooms[msg.room] = {
                 videoId: msg.videoId,
-                clients: [ws],
-                timeout: null
+                host: ws,
+                clients: [ws]
             };
 
             ws.room = msg.room;
+            ws.isHost = true;
 
             ws.send(JSON.stringify({
                 type: "ROOM_CREATED",
@@ -32,7 +32,7 @@ wss.on("connection", ws => {
             return;
         }
 
-        // JOIN ROOM
+        // JOIN
         if (msg.type === "JOIN_ROOM") {
 
             const room = rooms[msg.room];
@@ -53,13 +53,9 @@ wss.on("connection", ws => {
                 return;
             }
 
-            if (room.timeout) {
-                clearTimeout(room.timeout);
-                room.timeout = null;
-            }
-
             room.clients.push(ws);
             ws.room = msg.room;
+            ws.isHost = false;
 
             ws.send(JSON.stringify({
                 type: "JOINED",
@@ -71,14 +67,16 @@ wss.on("connection", ws => {
             return;
         }
 
-        // SYNC EVENTS
-        if (!ws.room || !rooms[ws.room]) return;
+        // ⭐ RELAY SYNC
+        if (ws.room && rooms[ws.room]) {
 
-        rooms[ws.room].clients.forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(msg));
-            }
-        });
+            rooms[ws.room].clients.forEach(client => {
+
+                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(msg));
+                }
+            });
+        }
     });
 
     ws.on("close", () => {
@@ -87,16 +85,23 @@ wss.on("connection", ws => {
 
         const room = rooms[ws.room];
 
-        room.clients = room.clients.filter(c => c !== ws);
+        if (ws.isHost) {
 
-        if (room.clients.length === 0) {
+            room.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        type: "SESSION_TERMINATED"
+                    }));
+                }
+            });
 
-            room.timeout = setTimeout(() => {
-                delete rooms[ws.room];
-                console.log("Room deleted:", ws.room);
-            }, ROOM_TIMEOUT);
+            delete rooms[ws.room];
+            console.log("Room destroyed:", ws.room);
+            return;
         }
+
+        room.clients = room.clients.filter(c => c !== ws);
     });
 });
 
-console.log("YSync server running ws://localhost:3000");
+console.log("✅ YSync server running ws://localhost:3000");
