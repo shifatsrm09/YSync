@@ -55,6 +55,19 @@ function attach(video) {
             time: video.currentTime
         });
     });
+
+    // ✅ HEARTBEAT PULSE EVERY 5 SEC
+    setInterval(() => {
+
+        console.log("[YSync] ALIVE sent");
+
+        chrome.runtime.sendMessage({
+            type: "ALIVE",
+            videoId: getVideoId(),
+            time: video.currentTime
+        });
+
+    }, 30000);
 }
 
 
@@ -83,6 +96,8 @@ chrome.runtime.onMessage.addListener(msg => {
     if (msg.type === "SEEK") {
         video.currentTime = msg.time;
     }
+
+    // ALIVE intentionally does nothing except console log
 });
 
 

@@ -67,7 +67,7 @@ wss.on("connection", ws => {
             return;
         }
 
-        // ⭐ RELAY SYNC
+        // RELAY SYNC
         if (ws.room && rooms[ws.room]) {
 
             rooms[ws.room].clients.forEach(client => {
@@ -85,22 +85,16 @@ wss.on("connection", ws => {
 
         const room = rooms[ws.room];
 
+        // Remove socket from clients
+        room.clients = room.clients.filter(c => c !== ws);
+
+        // If host disconnects → just mark host null
         if (ws.isHost) {
-
-            room.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({
-                        type: "SESSION_TERMINATED"
-                    }));
-                }
-            });
-
-            delete rooms[ws.room];
-            console.log("Room destroyed:", ws.room);
-            return;
+            room.host = null;
+            console.log("Host disconnected but room kept:", ws.room);
         }
 
-        room.clients = room.clients.filter(c => c !== ws);
+        console.log("Client disconnected from room:", ws.room);
     });
 });
 

@@ -113,11 +113,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    // ✅ ADDED ALIVE HERE (same behavior as PLAY/PAUSE/SEEK)
     if (
         socket &&
         socket.readyState === WebSocket.OPEN &&
         activeSession &&
-        ["PLAY","PAUSE","SEEK"].includes(msg.type)
+        ["PLAY", "PAUSE", "SEEK", "ALIVE"].includes(msg.type)
     ) {
         send(msg);
     }
