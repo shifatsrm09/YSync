@@ -6,6 +6,12 @@ body {
   padding: 12px;
 }
 
+.byCFAT {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-left: 5px;
+}
+
 h1 {
   font-size: 18px;
   margin-bottom: 10px;
