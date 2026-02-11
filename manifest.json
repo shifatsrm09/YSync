@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YSync",
   "version": "1.0",
-  "description": "YouTube Watch Together (Local Session)",
+  "description": "YouTube Watch Together",
 
   "permissions": ["tabs", "storage"],
 
@@ -11,6 +11,13 @@
   "background": {
     "service_worker": "background.js"
   },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["config.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
 
   "content_scripts": [
     {

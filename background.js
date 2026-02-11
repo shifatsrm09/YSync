@@ -1,3 +1,5 @@
+importScripts("config.js");
+
 let socket = null;
 let activeSession = null;
 
@@ -5,7 +7,7 @@ function connect() {
 
     if (socket && socket.readyState === WebSocket.OPEN) return;
 
-    socket = new WebSocket("ws://localhost:3000");
+    socket = new WebSocket(YSYNC_SERVER);
 
     socket.onopen = () => {
         console.log("[YSync] Socket connected");
@@ -17,7 +19,6 @@ function connect() {
 
         console.log("[YSync] Server ->", msg.type);
 
-        // SESSION
         if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
 
             activeSession = {
@@ -36,27 +37,14 @@ function connect() {
         }
 
         if (msg.type === "SESSION_TERMINATED") {
-
             activeSession = null;
-
-            chrome.runtime.sendMessage({
-                type: "SESSION_TERMINATED"
-            });
-
             return;
         }
 
         if (msg.type === "ERROR") {
-
-            chrome.runtime.sendMessage({
-                type: "SESSION_ERROR",
-                error: msg.error
-            });
-
             return;
         }
 
-        // ⭐ Forward EVERYTHING else to tabs
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
             tabs.forEach(tab => {
                 chrome.tabs.sendMessage(tab.id, msg);
@@ -66,11 +54,11 @@ function connect() {
 }
 
 function send(payload) {
+
     connect();
 
     const trySend = () => {
         if (socket.readyState === WebSocket.OPEN) {
-            console.log("[YSync] Sending ->", payload.type);
             socket.send(JSON.stringify(payload));
         } else {
             setTimeout(trySend, 100);
@@ -104,7 +92,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             videoId: msg.videoId
         });
 
-        sendResponse({ joining: true });
         return true;
     }
 
@@ -113,7 +100,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
-    // ✅ ADDED ALIVE HERE (same behavior as PLAY/PAUSE/SEEK)
     if (
         socket &&
         socket.readyState === WebSocket.OPEN &&

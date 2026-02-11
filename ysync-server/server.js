@@ -1,6 +1,10 @@
 const WebSocket = require("ws");
+require("dotenv").config();
 
-const wss = new WebSocket.Server({ port: 3000 });
+// Render gives dynamic port via ENV
+const PORT = process.env.PORT || 3000;
+
+const wss = new WebSocket.Server({ port: PORT });
 
 const rooms = {};
 
@@ -8,16 +12,28 @@ wss.on("connection", ws => {
 
     ws.on("message", raw => {
 
-        const msg = JSON.parse(raw);
+        let msg;
+        try {
+            msg = JSON.parse(raw);
+        } catch {
+            return;
+        }
 
-        // CREATE
+        // CREATE ROOM
         if (msg.type === "CREATE_ROOM") {
 
-            rooms[msg.room] = {
-                videoId: msg.videoId,
-                host: ws,
-                clients: [ws]
-            };
+            if (!rooms[msg.room]) {
+                rooms[msg.room] = {
+                    videoId: msg.videoId,
+                    host: ws,
+                    clients: []
+                };
+            }
+
+            const room = rooms[msg.room];
+
+            room.host = ws;
+            room.clients.push(ws);
 
             ws.room = msg.room;
             ws.isHost = true;
@@ -28,11 +44,11 @@ wss.on("connection", ws => {
                 videoId: msg.videoId
             }));
 
-            console.log("Room created:", msg.room);
+            console.log("Room created or reused:", msg.room);
             return;
         }
 
-        // JOIN
+        // JOIN ROOM
         if (msg.type === "JOIN_ROOM") {
 
             const room = rooms[msg.room];
@@ -54,6 +70,7 @@ wss.on("connection", ws => {
             }
 
             room.clients.push(ws);
+
             ws.room = msg.room;
             ws.isHost = false;
 
@@ -67,11 +84,12 @@ wss.on("connection", ws => {
             return;
         }
 
-        // RELAY SYNC
+        // RELAY ALL EVENTS (PLAY / PAUSE / SEEK / ALIVE)
         if (ws.room && rooms[ws.room]) {
 
-            rooms[ws.room].clients.forEach(client => {
+            const room = rooms[ws.room];
 
+            room.clients.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify(msg));
                 }
@@ -85,17 +103,15 @@ wss.on("connection", ws => {
 
         const room = rooms[ws.room];
 
-        // Remove socket from clients
         room.clients = room.clients.filter(c => c !== ws);
 
-        // If host disconnects → just mark host null
         if (ws.isHost) {
             room.host = null;
-            console.log("Host disconnected but room kept:", ws.room);
+            console.log("Host disconnected but room preserved:", ws.room);
+        } else {
+            console.log("Client disconnected from room:", ws.room);
         }
-
-        console.log("Client disconnected from room:", ws.room);
     });
 });
 
-console.log("✅ YSync server running ws://localhost:3000");
+console.log("✅ YSync server running on port", PORT);
