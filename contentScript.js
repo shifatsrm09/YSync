@@ -2,8 +2,11 @@ console.log("[YSync] Content loaded");
 
 let lastVideo = null;
 let lastRemoteAction = 0;
-const SUPPRESSION_WINDOW = 250;
 
+const SUPPRESSION_WINDOW = 250;   // keep stable
+
+
+// ---------------- GET VIDEO ----------------
 function getVideo() {
     return document.querySelector("video");
 }
@@ -21,7 +24,7 @@ function shouldSuppress() {
 }
 
 
-// ---------------- ATTACH ----------------
+// ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
     if (video.__ysyncAttached) return;
@@ -32,6 +35,8 @@ function attach(video) {
     video.addEventListener("play", () => {
 
         if (shouldSuppress()) return;
+
+        console.log("[YSync] PLAY sent");
 
         chrome.runtime.sendMessage({
             type: "PLAY",
@@ -44,6 +49,8 @@ function attach(video) {
 
         if (shouldSuppress()) return;
 
+        console.log("[YSync] PAUSE sent");
+
         chrome.runtime.sendMessage({
             type: "PAUSE",
             videoId: getVideoId(),
@@ -55,6 +62,8 @@ function attach(video) {
 
         if (shouldSuppress()) return;
 
+        console.log("[YSync] SEEK sent");
+
         chrome.runtime.sendMessage({
             type: "SEEK",
             videoId: getVideoId(),
@@ -62,8 +71,10 @@ function attach(video) {
         });
     });
 
-    // Heartbeat
+    // ---------------- HEARTBEAT (30 seconds) ----------------
     setInterval(() => {
+
+        console.log("[YSync] ALIVE sent");
 
         chrome.runtime.sendMessage({
             type: "ALIVE",
@@ -71,11 +82,11 @@ function attach(video) {
             time: video.currentTime
         });
 
-    }, 15000);
+    }, 30000);  // 🔥 30 seconds
 }
 
 
-// ---------------- VIDEO WATCH ----------------
+// ---------------- WATCH VIDEO ----------------
 function watchVideo() {
 
     setInterval(() => {
@@ -84,6 +95,9 @@ function watchVideo() {
         if (!video) return;
 
         if (video !== lastVideo) {
+
+            console.log("[YSync] Video changed → reattaching");
+
             lastVideo = video;
             attach(video);
         }
@@ -102,6 +116,8 @@ chrome.runtime.onMessage.addListener(msg => {
 
     // REQUEST SYNC SNAPSHOT
     if (msg.type === "REQUEST_SYNC_STATE") {
+
+        console.log("[YSync] REQUEST_SYNC_STATE received → sending snapshot");
 
         chrome.runtime.sendMessage({
             type: "SYNC_STATE",
@@ -122,8 +138,11 @@ chrome.runtime.onMessage.addListener(msg => {
 
         video.currentTime = msg.time;
 
-        if (msg.paused) video.pause();
-        else video.play();
+        if (msg.paused) {
+            video.pause();
+        } else {
+            video.play();
+        }
 
         return;
     }
@@ -131,18 +150,32 @@ chrome.runtime.onMessage.addListener(msg => {
     lastRemoteAction = Date.now();
 
     if (msg.type === "PLAY") {
+
+        console.log("[YSync] PLAY received");
+
         video.currentTime = msg.time;
         video.play();
     }
 
     if (msg.type === "PAUSE") {
+
+        console.log("[YSync] PAUSE received");
+
         video.currentTime = msg.time;
         video.pause();
     }
 
     if (msg.type === "SEEK") {
+
+        console.log("[YSync] SEEK received");
+
         video.currentTime = msg.time;
     }
+
+    if (msg.type === "ALIVE") {
+        console.log("[YSync] ALIVE received");
+    }
 });
+
 
 watchVideo();
