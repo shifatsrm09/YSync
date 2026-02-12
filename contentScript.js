@@ -1,8 +1,10 @@
 console.log("[YSync] Content loaded");
 
+let lastVideo = null;
 let lastRemoteAction = 0;
-const SUPPRESSION_WINDOW = 500; // ms
+const SUPPRESSION_WINDOW = 500;
 
+// ---------------- GET VIDEO ----------------
 function getVideo() {
     return document.querySelector("video");
 }
@@ -15,10 +17,15 @@ function shouldSuppress() {
     return Date.now() - lastRemoteAction < SUPPRESSION_WINDOW;
 }
 
+// ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
-    video.addEventListener("play", () => {
+    if (video.__ysyncAttached) return;
+    video.__ysyncAttached = true;
 
+    console.log("[YSync] Listeners attached");
+
+    video.addEventListener("play", () => {
         if (shouldSuppress()) return;
 
         console.log("[YSync] PLAY sent");
@@ -31,7 +38,6 @@ function attach(video) {
     });
 
     video.addEventListener("pause", () => {
-
         if (shouldSuppress()) return;
 
         console.log("[YSync] PAUSE sent");
@@ -44,7 +50,6 @@ function attach(video) {
     });
 
     video.addEventListener("seeked", () => {
-
         if (shouldSuppress()) return;
 
         console.log("[YSync] SEEK sent");
@@ -56,7 +61,7 @@ function attach(video) {
         });
     });
 
-    // ✅ HEARTBEAT PULSE EVERY 5 SEC
+    // HEARTBEAT
     setInterval(() => {
 
         console.log("[YSync] ALIVE sent");
@@ -67,45 +72,59 @@ function attach(video) {
             time: video.currentTime
         });
 
-    }, 30000);
+    }, 15000);
 }
 
+// ---------------- WATCH VIDEO ----------------
+function watchVideo() {
 
-// ---------- REMOTE EVENTS ----------
+    setInterval(() => {
+
+        const video = getVideo();
+        if (!video) return;
+
+        if (video !== lastVideo) {
+            console.log("[YSync] Video changed → reattaching");
+            lastVideo = video;
+            attach(video);
+        }
+
+    }, 1000);
+}
+
+// ---------------- REMOTE EVENTS ----------------
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
     if (!video) return;
 
-    if (msg.videoId !== getVideoId()) return;
-
-    console.log("[YSync] Received", msg.type);
+    if (msg.videoId && msg.videoId !== getVideoId()) return;
 
     lastRemoteAction = Date.now();
 
     if (msg.type === "PLAY") {
+        console.log("[YSync] PLAY received");
+
         video.currentTime = msg.time;
         video.play();
     }
 
     if (msg.type === "PAUSE") {
+        console.log("[YSync] PAUSE received");
+
         video.currentTime = msg.time;
         video.pause();
     }
 
     if (msg.type === "SEEK") {
+        console.log("[YSync] SEEK received");
+
         video.currentTime = msg.time;
     }
 
-    // ALIVE intentionally does nothing except console log
+    if (msg.type === "ALIVE") {
+        console.log("[YSync] ALIVE received");
+    }
 });
 
-
-// ---------- VIDEO DETECTOR ----------
-const observer = setInterval(() => {
-    const video = getVideo();
-    if (video) {
-        attach(video);
-        clearInterval(observer);
-    }
-}, 1000);
+watchVideo();
