@@ -3,7 +3,6 @@ console.log("[YSync] Content loaded");
 let lastVideo = null;
 let lastRemoteAction = 0;
 
-// Reduced suppression window (prevents swallowing legitimate pause/play)
 const SUPPRESSION_WINDOW = 250;
 
 
@@ -28,7 +27,6 @@ function shouldSuppress() {
 // ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
-    // Prevent duplicate attachment
     if (video.__ysyncAttached) return;
     video.__ysyncAttached = true;
 
@@ -73,7 +71,7 @@ function attach(video) {
         });
     });
 
-    // ---------------- HEARTBEAT ----------------
+    // HEARTBEAT
     setInterval(() => {
 
         console.log("[YSync] ALIVE sent");
@@ -88,8 +86,7 @@ function attach(video) {
 }
 
 
-// ---------------- WATCH VIDEO ELEMENT ----------------
-// Fix for YouTube SPA replacing video element
+// ---------------- WATCH VIDEO ----------------
 function watchVideo() {
 
     setInterval(() => {
@@ -98,9 +95,7 @@ function watchVideo() {
         if (!video) return;
 
         if (video !== lastVideo) {
-
-            console.log("[YSync] Video changed → reattaching listeners");
-
+            console.log("[YSync] Video changed → reattaching");
             lastVideo = video;
             attach(video);
         }
@@ -109,7 +104,7 @@ function watchVideo() {
 }
 
 
-// ---------------- RECEIVE REMOTE EVENTS ----------------
+// ---------------- RECEIVE EVENTS ----------------
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
@@ -120,25 +115,19 @@ chrome.runtime.onMessage.addListener(msg => {
     lastRemoteAction = Date.now();
 
     if (msg.type === "PLAY") {
-
         console.log("[YSync] PLAY received");
-
         video.currentTime = msg.time;
         video.play();
     }
 
     if (msg.type === "PAUSE") {
-
         console.log("[YSync] PAUSE received");
-
         video.currentTime = msg.time;
         video.pause();
     }
 
     if (msg.type === "SEEK") {
-
         console.log("[YSync] SEEK received");
-
         video.currentTime = msg.time;
     }
 
@@ -146,6 +135,5 @@ chrome.runtime.onMessage.addListener(msg => {
         console.log("[YSync] ALIVE received");
     }
 });
-
 
 watchVideo();

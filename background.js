@@ -3,12 +3,13 @@ importScripts("config.js");
 let socket = null;
 let activeSession = null;
 let messageQueue = [];
-
-// 🔥 NEW: prevents popup race condition
 let sessionLoaded = false;
 
+let reconnectTimer = null;
+let lastAliveReceived = Date.now(); // WATCHDOG TRACKER
 
-// ---------------- LOAD STORED SESSION ----------------
+
+// ---------------- LOAD SESSION ----------------
 chrome.storage.local.get("activeSession", data => {
 
     if (data.activeSession) {
@@ -20,7 +21,24 @@ chrome.storage.local.get("activeSession", data => {
 });
 
 
-// ---------------- QUEUE FLUSH ----------------
+// ---------------- WATCHDOG ----------------
+// Detect half-open sockets (Render proxy issue)
+setInterval(() => {
+
+    if (!socket) return;
+    if (socket.readyState !== WebSocket.OPEN) return;
+
+    const diff = Date.now() - lastAliveReceived;
+
+    if (diff > 35000) { // 35s no server response
+        console.log("[YSync] Heartbeat timeout → forcing reconnect");
+        socket.close();
+    }
+
+}, 5000);
+
+
+// ---------------- QUEUE ----------------
 function flushQueue() {
 
     while (
@@ -28,9 +46,20 @@ function flushQueue() {
         socket &&
         socket.readyState === WebSocket.OPEN
     ) {
-        const payload = messageQueue.shift();
-        socket.send(JSON.stringify(payload));
+        socket.send(JSON.stringify(messageQueue.shift()));
     }
+}
+
+
+// ---------------- RECONNECT ----------------
+function scheduleReconnect() {
+
+    if (reconnectTimer) return;
+
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+    }, 2000);
 }
 
 
@@ -39,14 +68,15 @@ function connect() {
 
     if (socket && socket.readyState === WebSocket.OPEN) return;
 
-    console.log("[YSync] Connecting to server...");
+    console.log("[YSync] Connecting...");
 
     socket = new WebSocket(YSYNC_SERVER);
 
     socket.onopen = () => {
 
-        console.log("[YSync] Connected");
+        console.log("[YSync] Socket connected");
 
+        lastAliveReceived = Date.now();
         flushQueue();
 
         if (activeSession) {
@@ -65,6 +95,11 @@ function connect() {
         const msg = JSON.parse(event.data);
 
         console.log("[YSync] Server ->", msg.type);
+
+        // WATCHDOG ACK
+        if (msg.type === "ALIVE") {
+            lastAliveReceived = Date.now();
+        }
 
         if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
 
@@ -85,8 +120,6 @@ function connect() {
 
         if (msg.type === "SESSION_TERMINATED") {
 
-            console.log("[YSync] Session terminated");
-
             activeSession = null;
             chrome.storage.local.remove("activeSession");
 
@@ -97,40 +130,26 @@ function connect() {
             return;
         }
 
-        if (msg.type === "ERROR") {
-
-            chrome.runtime.sendMessage({
-                type: "SESSION_ERROR",
-                error: msg.error
-            });
-
-            return;
-        }
-
-        // Relay sync events
+        // Relay to tabs
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
-
-            tabs.forEach(tab => {
-                chrome.tabs.sendMessage(tab.id, msg);
-            });
-
+            tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, msg));
         });
     };
 
     socket.onclose = () => {
         console.log("[YSync] Socket closed");
+        scheduleReconnect();
     };
 
-    socket.onerror = err => {
-        console.log("[YSync] Socket error", err);
+    socket.onerror = () => {
+        console.log("[YSync] Socket error");
+        socket.close();
     };
 }
 
 
 // ---------------- SEND ----------------
 function send(payload) {
-
-    console.log("[YSync] Sending ->", payload.type);
 
     connect();
 
@@ -146,7 +165,6 @@ function send(payload) {
 // ---------------- MESSAGE HANDLER ----------------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
-    // CREATE SESSION
     if (msg.type === "CREATE_SESSION") {
 
         const room = Math.floor(1000 + Math.random() * 9000).toString();
@@ -161,7 +179,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
-    // JOIN SESSION
     if (msg.type === "JOIN_SESSION") {
 
         send({
@@ -173,10 +190,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
-    // LEAVE SESSION
     if (msg.type === "LEAVE_SESSION") {
-
-        console.log("[YSync] Leaving session");
 
         activeSession = null;
         chrome.storage.local.remove("activeSession");
@@ -189,23 +203,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
     }
 
-    // 🔥 FIXED GET_SESSION
     if (msg.type === "GET_SESSION") {
 
-        const waitForSession = () => {
-
-            if (sessionLoaded) {
-                sendResponse(activeSession);
-            } else {
-                setTimeout(waitForSession, 50);
-            }
+        const wait = () => {
+            if (sessionLoaded) sendResponse(activeSession);
+            else setTimeout(wait, 50);
         };
 
-        waitForSession();
+        wait();
         return true;
     }
 
-    // RELAY SYNC EVENTS
     if (
         activeSession &&
         ["PLAY", "PAUSE", "SEEK", "ALIVE"].includes(msg.type)
