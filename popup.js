@@ -41,17 +41,29 @@ function getVideoId(cb) {
     });
 }
 
-chrome.runtime.sendMessage({ type: "GET_SESSION" }, session => {
+// ---------------- SAFE SESSION CHECK ----------------
+function checkSession() {
 
-    if (!session) {
-        setStatus("Not in session");
-        updateButtons(false);
-        return;
-    }
+    chrome.runtime.sendMessage({ type: "GET_SESSION" }, session => {
 
-    setStatus("Session: " + session.code, "#4caf50");
-    updateButtons(true);
-});
+        if (!session) {
+            setStatus("Not in session");
+            updateButtons(false);
+            return;
+        }
+
+        setStatus("Session: " + session.code, "#4caf50");
+        updateButtons(true);
+    });
+}
+
+// Initial check
+checkSession();
+
+// 🔥 Bug fix: delayed re-check (handles background async storage load)
+setTimeout(checkSession, 400);
+
+
 
 createBtn.onclick = () => {
 
