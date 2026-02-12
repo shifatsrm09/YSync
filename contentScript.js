@@ -2,7 +2,10 @@ console.log("[YSync] Content loaded");
 
 let lastVideo = null;
 let lastRemoteAction = 0;
-const SUPPRESSION_WINDOW = 500;
+
+// Reduced suppression window (prevents swallowing legitimate pause/play)
+const SUPPRESSION_WINDOW = 250;
+
 
 // ---------------- GET VIDEO ----------------
 function getVideo() {
@@ -10,22 +13,29 @@ function getVideo() {
 }
 
 function getVideoId() {
-    return new URL(location.href).searchParams.get("v");
+    try {
+        return new URL(location.href).searchParams.get("v");
+    } catch {
+        return null;
+    }
 }
 
 function shouldSuppress() {
     return Date.now() - lastRemoteAction < SUPPRESSION_WINDOW;
 }
 
+
 // ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
+    // Prevent duplicate attachment
     if (video.__ysyncAttached) return;
     video.__ysyncAttached = true;
 
     console.log("[YSync] Listeners attached");
 
     video.addEventListener("play", () => {
+
         if (shouldSuppress()) return;
 
         console.log("[YSync] PLAY sent");
@@ -38,6 +48,7 @@ function attach(video) {
     });
 
     video.addEventListener("pause", () => {
+
         if (shouldSuppress()) return;
 
         console.log("[YSync] PAUSE sent");
@@ -50,6 +61,7 @@ function attach(video) {
     });
 
     video.addEventListener("seeked", () => {
+
         if (shouldSuppress()) return;
 
         console.log("[YSync] SEEK sent");
@@ -61,7 +73,7 @@ function attach(video) {
         });
     });
 
-    // HEARTBEAT
+    // ---------------- HEARTBEAT ----------------
     setInterval(() => {
 
         console.log("[YSync] ALIVE sent");
@@ -75,7 +87,9 @@ function attach(video) {
     }, 15000);
 }
 
-// ---------------- WATCH VIDEO ----------------
+
+// ---------------- WATCH VIDEO ELEMENT ----------------
+// Fix for YouTube SPA replacing video element
 function watchVideo() {
 
     setInterval(() => {
@@ -84,7 +98,9 @@ function watchVideo() {
         if (!video) return;
 
         if (video !== lastVideo) {
-            console.log("[YSync] Video changed → reattaching");
+
+            console.log("[YSync] Video changed → reattaching listeners");
+
             lastVideo = video;
             attach(video);
         }
@@ -92,7 +108,8 @@ function watchVideo() {
     }, 1000);
 }
 
-// ---------------- REMOTE EVENTS ----------------
+
+// ---------------- RECEIVE REMOTE EVENTS ----------------
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
@@ -103,6 +120,7 @@ chrome.runtime.onMessage.addListener(msg => {
     lastRemoteAction = Date.now();
 
     if (msg.type === "PLAY") {
+
         console.log("[YSync] PLAY received");
 
         video.currentTime = msg.time;
@@ -110,6 +128,7 @@ chrome.runtime.onMessage.addListener(msg => {
     }
 
     if (msg.type === "PAUSE") {
+
         console.log("[YSync] PAUSE received");
 
         video.currentTime = msg.time;
@@ -117,6 +136,7 @@ chrome.runtime.onMessage.addListener(msg => {
     }
 
     if (msg.type === "SEEK") {
+
         console.log("[YSync] SEEK received");
 
         video.currentTime = msg.time;
@@ -126,5 +146,6 @@ chrome.runtime.onMessage.addListener(msg => {
         console.log("[YSync] ALIVE received");
     }
 });
+
 
 watchVideo();

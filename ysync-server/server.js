@@ -1,9 +1,7 @@
 const WebSocket = require("ws");
 require("dotenv").config();
 
-// Render gives dynamic port via ENV
 const PORT = process.env.PORT || 3000;
-
 const wss = new WebSocket.Server({ port: PORT });
 
 const rooms = {};
@@ -25,18 +23,18 @@ wss.on("connection", ws => {
             if (!rooms[msg.room]) {
                 rooms[msg.room] = {
                     videoId: msg.videoId,
-                    host: ws,
                     clients: []
                 };
             }
 
             const room = rooms[msg.room];
 
-            room.host = ws;
-            room.clients.push(ws);
-
             ws.room = msg.room;
             ws.isHost = true;
+
+            if (!room.clients.includes(ws)) {
+                room.clients.push(ws);
+            }
 
             ws.send(JSON.stringify({
                 type: "ROOM_CREATED",
@@ -44,7 +42,7 @@ wss.on("connection", ws => {
                 videoId: msg.videoId
             }));
 
-            console.log("Room created or reused:", msg.room);
+            console.log("Room created:", msg.room);
             return;
         }
 
@@ -52,27 +50,14 @@ wss.on("connection", ws => {
         if (msg.type === "JOIN_ROOM") {
 
             const room = rooms[msg.room];
-
-            if (!room) {
-                ws.send(JSON.stringify({
-                    type: "ERROR",
-                    error: "Session not found"
-                }));
-                return;
-            }
-
-            if (room.videoId !== msg.videoId) {
-                ws.send(JSON.stringify({
-                    type: "ERROR",
-                    error: "Video mismatch"
-                }));
-                return;
-            }
-
-            room.clients.push(ws);
+            if (!room) return;
 
             ws.room = msg.room;
             ws.isHost = false;
+
+            if (!room.clients.includes(ws)) {
+                room.clients.push(ws);
+            }
 
             ws.send(JSON.stringify({
                 type: "JOINED",
@@ -84,15 +69,23 @@ wss.on("connection", ws => {
             return;
         }
 
-        // RELAY ALL EVENTS (PLAY / PAUSE / SEEK / ALIVE)
+        // RELAY
         if (ws.room && rooms[ws.room]) {
 
             const room = rooms[ws.room];
 
             room.clients.forEach(client => {
-                if (client !== ws && client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify(msg));
+
+                if (client !== ws &&
+                    client.readyState === WebSocket.OPEN) {
+
+                    try {
+                        client.send(JSON.stringify(msg));
+                    } catch {
+                        console.log("Send failed");
+                    }
                 }
+
             });
         }
     });
@@ -105,13 +98,8 @@ wss.on("connection", ws => {
 
         room.clients = room.clients.filter(c => c !== ws);
 
-        if (ws.isHost) {
-            room.host = null;
-            console.log("Host disconnected but room preserved:", ws.room);
-        } else {
-            console.log("Client disconnected from room:", ws.room);
-        }
+        console.log("Client disconnected:", ws.room);
     });
 });
 
-console.log("✅ YSync server running on port", PORT);
+console.log("YSync server running on port", PORT);
