@@ -6,10 +6,8 @@ let messageQueue = [];
 let sessionLoaded = false;
 
 let reconnectTimer = null;
-let lastAliveReceived = Date.now(); // WATCHDOG TRACKER
+let lastAliveReceived = Date.now();
 
-
-// ---------------- LOAD SESSION ----------------
 chrome.storage.local.get("activeSession", data => {
 
     if (data.activeSession) {
@@ -22,16 +20,13 @@ chrome.storage.local.get("activeSession", data => {
 
 
 // ---------------- WATCHDOG ----------------
-// Detect half-open sockets (Render proxy issue)
 setInterval(() => {
 
     if (!socket) return;
     if (socket.readyState !== WebSocket.OPEN) return;
 
-    const diff = Date.now() - lastAliveReceived;
-
-    if (diff > 35000) { // 35s no server response
-        console.log("[YSync] Heartbeat timeout → forcing reconnect");
+    if (Date.now() - lastAliveReceived > 35000) {
+        console.log("[YSync] Heartbeat timeout → reconnecting");
         socket.close();
     }
 
@@ -80,8 +75,6 @@ function connect() {
         flushQueue();
 
         if (activeSession) {
-            console.log("[YSync] Rejoining session:", activeSession.code);
-
             socket.send(JSON.stringify({
                 type: "JOIN_ROOM",
                 room: activeSession.code,
@@ -96,7 +89,6 @@ function connect() {
 
         console.log("[YSync] Server ->", msg.type);
 
-        // WATCHDOG ACK
         if (msg.type === "ALIVE") {
             lastAliveReceived = Date.now();
         }
@@ -115,22 +107,16 @@ function connect() {
                 code: msg.room
             });
 
-            return;
-        }
-
-        if (msg.type === "SESSION_TERMINATED") {
-
-            activeSession = null;
-            chrome.storage.local.remove("activeSession");
-
-            chrome.runtime.sendMessage({
-                type: "SESSION_TERMINATED"
+            // 🔥 Request sync snapshot when someone joins
+            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                tabs.forEach(tab => {
+                    chrome.tabs.sendMessage(tab.id, { type: "REQUEST_SYNC_STATE" });
+                });
             });
 
             return;
         }
 
-        // Relay to tabs
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
             tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, msg));
         });
@@ -142,7 +128,6 @@ function connect() {
     };
 
     socket.onerror = () => {
-        console.log("[YSync] Socket error");
         socket.close();
     };
 }
@@ -216,7 +201,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (
         activeSession &&
-        ["PLAY", "PAUSE", "SEEK", "ALIVE"].includes(msg.type)
+        ["PLAY", "PAUSE", "SEEK", "ALIVE", "SYNC_STATE"].includes(msg.type)
     ) {
         send(msg);
     }
