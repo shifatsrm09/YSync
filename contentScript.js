@@ -3,8 +3,7 @@ console.log("[YSync] Content loaded");
 let lastVideo = null;
 let lastRemoteAction = 0;
 
-// Reduced suppression window (prevents swallowing legitimate pause/play)
-const SUPPRESSION_WINDOW = 250;
+const SUPPRESSION_WINDOW = 250;   // keep stable
 
 
 // ---------------- GET VIDEO ----------------
@@ -28,7 +27,6 @@ function shouldSuppress() {
 // ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
-    // Prevent duplicate attachment
     if (video.__ysyncAttached) return;
     video.__ysyncAttached = true;
 
@@ -73,7 +71,7 @@ function attach(video) {
         });
     });
 
-    // ---------------- HEARTBEAT ----------------
+    // ---------------- HEARTBEAT (30 seconds) ----------------
     setInterval(() => {
 
         console.log("[YSync] ALIVE sent");
@@ -84,12 +82,11 @@ function attach(video) {
             time: video.currentTime
         });
 
-    }, 15000);
+    }, 30000);  // 🔥 30 seconds
 }
 
 
-// ---------------- WATCH VIDEO ELEMENT ----------------
-// Fix for YouTube SPA replacing video element
+// ---------------- WATCH VIDEO ----------------
 function watchVideo() {
 
     setInterval(() => {
@@ -99,7 +96,7 @@ function watchVideo() {
 
         if (video !== lastVideo) {
 
-            console.log("[YSync] Video changed → reattaching listeners");
+            console.log("[YSync] Video changed → reattaching");
 
             lastVideo = video;
             attach(video);
@@ -109,13 +106,46 @@ function watchVideo() {
 }
 
 
-// ---------------- RECEIVE REMOTE EVENTS ----------------
+// ---------------- MESSAGE HANDLER ----------------
 chrome.runtime.onMessage.addListener(msg => {
 
     const video = getVideo();
     if (!video) return;
 
     if (msg.videoId && msg.videoId !== getVideoId()) return;
+
+    // REQUEST SYNC SNAPSHOT
+    if (msg.type === "REQUEST_SYNC_STATE") {
+
+        console.log("[YSync] REQUEST_SYNC_STATE received → sending snapshot");
+
+        chrome.runtime.sendMessage({
+            type: "SYNC_STATE",
+            videoId: getVideoId(),
+            time: video.currentTime,
+            paused: video.paused
+        });
+
+        return;
+    }
+
+    // APPLY SNAPSHOT
+    if (msg.type === "SYNC_STATE") {
+
+        console.log("[YSync] SYNC_STATE received");
+
+        lastRemoteAction = Date.now();
+
+        video.currentTime = msg.time;
+
+        if (msg.paused) {
+            video.pause();
+        } else {
+            video.play();
+        }
+
+        return;
+    }
 
     lastRemoteAction = Date.now();
 
