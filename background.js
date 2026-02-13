@@ -8,6 +8,8 @@ let sessionLoaded = false;
 let reconnectTimer = null;
 let lastAliveReceived = Date.now();
 
+
+// ---------------- LOAD STORED SESSION ----------------
 chrome.storage.local.get("activeSession", data => {
 
     if (data.activeSession) {
@@ -25,7 +27,7 @@ setInterval(() => {
     if (!socket) return;
     if (socket.readyState !== WebSocket.OPEN) return;
 
-    if (Date.now() - lastAliveReceived > 35000) {
+    if (Date.now() - lastAliveReceived > 65000) { // Safe vs 30s heartbeat
         console.log("[YSync] Heartbeat timeout → reconnecting");
         socket.close();
     }
@@ -75,6 +77,8 @@ function connect() {
         flushQueue();
 
         if (activeSession) {
+            console.log("[YSync] Rejoining session:", activeSession.code);
+
             socket.send(JSON.stringify({
                 type: "JOIN_ROOM",
                 room: activeSession.code,
@@ -93,6 +97,7 @@ function connect() {
             lastAliveReceived = Date.now();
         }
 
+        // ---------------- SESSION CONFIRMED ----------------
         if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
 
             activeSession = {
@@ -102,12 +107,20 @@ function connect() {
 
             chrome.storage.local.set({ activeSession });
 
+            // Notify popup
             chrome.runtime.sendMessage({
                 type: "SESSION_CONFIRMED",
                 code: msg.room
             });
 
-            // 🔥 Request sync snapshot when someone joins
+            // 🔥 Notify ALL content scripts
+            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                tabs.forEach(tab => {
+                    chrome.tabs.sendMessage(tab.id, { type: "SESSION_CONFIRMED" });
+                });
+            });
+
+            // 🔥 Request sync snapshot
             chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
                 tabs.forEach(tab => {
                     chrome.tabs.sendMessage(tab.id, { type: "REQUEST_SYNC_STATE" });
@@ -117,6 +130,29 @@ function connect() {
             return;
         }
 
+
+        // ---------------- SESSION TERMINATED ----------------
+        if (msg.type === "SESSION_TERMINATED") {
+
+            activeSession = null;
+            chrome.storage.local.remove("activeSession");
+
+            chrome.runtime.sendMessage({
+                type: "SESSION_TERMINATED"
+            });
+
+            // 🔥 Notify content scripts
+            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                tabs.forEach(tab => {
+                    chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+                });
+            });
+
+            return;
+        }
+
+
+        // ---------------- RELAY SYNC EVENTS ----------------
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
             tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, msg));
         });
@@ -128,6 +164,7 @@ function connect() {
     };
 
     socket.onerror = () => {
+        console.log("[YSync] Socket error");
         socket.close();
     };
 }
@@ -150,6 +187,7 @@ function send(payload) {
 // ---------------- MESSAGE HANDLER ----------------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
+    // CREATE SESSION
     if (msg.type === "CREATE_SESSION") {
 
         const room = Math.floor(1000 + Math.random() * 9000).toString();
@@ -164,6 +202,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    // JOIN SESSION
     if (msg.type === "JOIN_SESSION") {
 
         send({
@@ -175,7 +214,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    // LEAVE SESSION
     if (msg.type === "LEAVE_SESSION") {
+
+        console.log("[YSync] Leaving session");
 
         activeSession = null;
         chrome.storage.local.remove("activeSession");
@@ -185,9 +227,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             socket = null;
         }
 
+        // 🔥 Notify content scripts
+        chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+            tabs.forEach(tab => {
+                chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+            });
+        });
+
         return;
     }
 
+    // GET SESSION
     if (msg.type === "GET_SESSION") {
 
         const wait = () => {
@@ -199,6 +249,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    // RELAY EVENTS
     if (
         activeSession &&
         ["PLAY", "PAUSE", "SEEK", "ALIVE", "SYNC_STATE"].includes(msg.type)

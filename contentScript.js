@@ -3,7 +3,26 @@ console.log("[YSync] Content loaded");
 let lastVideo = null;
 let lastRemoteAction = 0;
 
-const SUPPRESSION_WINDOW = 250;   // keep stable
+const SUPPRESSION_WINDOW = 250;
+
+let inSession = false;   // 🔥 NEW SESSION FLAG
+
+
+// ---------------- SESSION STATE TRACKING ----------------
+chrome.runtime.onMessage.addListener(msg => {
+
+    if (msg.type === "SESSION_CONFIRMED") {
+        console.log("[YSync] Session confirmed → enabling sync send");
+        inSession = true;
+        return;
+    }
+
+    if (msg.type === "SESSION_TERMINATED") {
+        console.log("[YSync] Session terminated → disabling sync send");
+        inSession = false;
+        return;
+    }
+});
 
 
 // ---------------- GET VIDEO ----------------
@@ -24,6 +43,20 @@ function shouldSuppress() {
 }
 
 
+// ---------------- SAFE SEND WRAPPER ----------------
+function sendIfSession(payload, label) {
+
+    if (!inSession) {
+        console.log(`[YSync] ${label} blocked (not in session)`);
+        return;
+    }
+
+    console.log(`[YSync] ${label} sent`);
+
+    chrome.runtime.sendMessage(payload);
+}
+
+
 // ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
 
@@ -36,53 +69,45 @@ function attach(video) {
 
         if (shouldSuppress()) return;
 
-        console.log("[YSync] PLAY sent");
-
-        chrome.runtime.sendMessage({
+        sendIfSession({
             type: "PLAY",
             videoId: getVideoId(),
             time: video.currentTime
-        });
+        }, "PLAY");
     });
 
     video.addEventListener("pause", () => {
 
         if (shouldSuppress()) return;
 
-        console.log("[YSync] PAUSE sent");
-
-        chrome.runtime.sendMessage({
+        sendIfSession({
             type: "PAUSE",
             videoId: getVideoId(),
             time: video.currentTime
-        });
+        }, "PAUSE");
     });
 
     video.addEventListener("seeked", () => {
 
         if (shouldSuppress()) return;
 
-        console.log("[YSync] SEEK sent");
-
-        chrome.runtime.sendMessage({
+        sendIfSession({
             type: "SEEK",
             videoId: getVideoId(),
             time: video.currentTime
-        });
+        }, "SEEK");
     });
 
-    // ---------------- HEARTBEAT (30 seconds) ----------------
+    // ---------------- HEARTBEAT (30s) ----------------
     setInterval(() => {
 
-        console.log("[YSync] ALIVE sent");
-
-        chrome.runtime.sendMessage({
+        sendIfSession({
             type: "ALIVE",
             videoId: getVideoId(),
             time: video.currentTime
-        });
+        }, "ALIVE");
 
-    }, 30000);  // 🔥 30 seconds
+    }, 30000);
 }
 
 
@@ -117,6 +142,8 @@ chrome.runtime.onMessage.addListener(msg => {
     // REQUEST SYNC SNAPSHOT
     if (msg.type === "REQUEST_SYNC_STATE") {
 
+        if (!inSession) return;
+
         console.log("[YSync] REQUEST_SYNC_STATE received → sending snapshot");
 
         chrome.runtime.sendMessage({
@@ -138,11 +165,8 @@ chrome.runtime.onMessage.addListener(msg => {
 
         video.currentTime = msg.time;
 
-        if (msg.paused) {
-            video.pause();
-        } else {
-            video.play();
-        }
+        if (msg.paused) video.pause();
+        else video.play();
 
         return;
     }
