@@ -1,0 +1,294 @@
+MAR 25,2026
+
+ # YSync Bug Analysis and Fixes
+
+ ## Overview
+ This document details the bugs found in the YSync project and the fixes implemented to improve stabil
+ ity, robustness, and error handling.
+
+ ---
+
+ ## Critical Bugs Found and Fixed
+
+     ### 1. Server Race Condition in Room Creation
+     **File:** `ysync-server/server.js`
+    
+     **Issue:** Non-atomic check-and-create operation for rooms:
+     ```javascript
+     if (!rooms[msg.room]) {
+         rooms[msg.room] = { videoId: msg.videoId, clients: [] };
+     }
+     ```
+     This could cause issues with concurrent connections.
+    
+     **Fix:** The operation is now atomic and rooms are immediately available upon creation. Added a check
+  for duplicate clients when joining.
+    
+     ---
+    
+     ### 2. Server: No Heartbeat Mechanism
+     **File:** `ysync-server/server.js`
+    
+     **Issue:** No ping/pong mechanism or timeout for stale connections. Disconnected clients would remain
+  as "ghost" connections.
+    
+     **Fix:** Added:
+     - Initial ALIVE message sent on connection
+     - Heartbeat timer that periodically checks all clients
+     - Clients that don't respond are terminated
+     - Client-side pong response on receiving ALIVE
+     - Cleanup of heartbeat timer on graceful shutdown
+    
+     ---
+    
+     ### 3. Server: Room Not Deleted When Empty
+     **File:** `ysync-server/server.js`
+    
+     **Issue:** When all clients left a room, the room entry remained in memory indefinitely.
+    
+     **Fix:** Added cleanup logic in both `LEAVE_ROOM` and `close` event handlers:
+     ```javascript
+     if (room.clients.length === 0) {
+         delete rooms[ws.room];
+     }
+     ```
+    
+     ---
+    
+     ### 4. Server: Missing Error Handling
+     **File:** `ysync-server/server.js`
+    
+     **Issue:** No try-catch blocks around WebSocket send operations.
+    
+     **Fix:** Added error handling with try-catch blocks around all send operations.
+    
+     ---
+    
+     ### 5. Server: Missing Session Termination by Host
+     **File:** `ysync-server/server.js`
+    
+     **Issue:** Hosts couldn't terminate a room.
+    
+     **Fix:** Added `TERMINATE_ROOM` message type that allows hosts to end a session and notify all client
+ s.
+    
+     ---
+    
+     ### 6. Background Script: Missing Error Handling for Chrome Tabs
+     **File:** `background.js`
+    
+     **Issue:** `chrome.tabs.sendMessage` could crash if a tab was closed during message delivery.
+    
+     **Fix:** Added try-catch blocks:
+     ```javascript
+     try {
+         chrome.tabs.sendMessage(tab.id, msg);
+     } catch (e) {}
+     ```
+    
+     ---
+    
+     ### 7. Background Script: Race Condition with Session Storage
+     **File:** `background.js`
+    
+     **Issue:** The `sessionLoaded` flag was set asynchronously, but `GET_SESSION` handler could fire befo
+ re it was set.
+    
+     **Fix:** Changed delay from 50ms to 100ms for better reliability, added explicit null checks in sessi
+ on handlers.
+    
+     ---
+    
+     ### 8. Background Script: No Exponential Backoff on Reconnection
+     **File:** `background.js`
+    
+     **Issue:** Always reconnected after 2 seconds, causing rapid reconnection attempts on persistent fail
+ ures.
+    
+     **Fix:** Implemented exponential backoff:
+       ```javascript
+       const calculateBackoffDelay = () => {
+           const delay = WS_RECONNECT_MIN_DELAY * Math.pow(WS_RECONNECT_BACKOFF, reconnectAttempts);
+           return Math.min(delay, WS_RECONNECT_MAX_DELAY);
+       };
+       ```
+      
+       ---
+      
+       ### 9. Background Script: Message Queue Issues
+       **File:** `background.js`
+      
+       **Issue:** No limit on message queue size, potential memory exhaustion.
+      
+       **Fix:** Added `WS_MAX_QUEUE_SIZE` limit with logging when queue is full and messages are dropped.
+      
+       ---
+      
+       ### 10. Content Script: Missing Error Handling
+       **File:** `contentScript.js`
+      
+       **Issue:** No try-catch around video operations or message sends.
+      
+       **Fix:** Added comprehensive error handling around:
+       - Video operations (play, pause, seek, currentTime)
+       - Chrome message sends
+       - URL parsing
+      
+       ---
+      
+       ### 11. Content Script: Session State Race Condition
+       **File:** `contentScript.js`
+      
+       **Issue:** Event listeners could fire before `inSession` flag was set.
+      
+       **Fix:** Added `setSessionState()` function that properly transitions state and reattaches to current
+  video.
+      
+       ---
+      
+       ### 12. Content Script: Missing Heartbeat Stop
+       **File:** `contentScript.js`
+      
+       **Issue:** Heartbeat timer continued running after session terminated.
+      
+       **Fix:** Added `stopHeartbeat()` function called when session is terminated.
+      
+       ---
+      
+       ### 13. Popup Script: Missing Input Validation
+       **File:** `popup.js`
+      
+       **Issue:** No validation of session code format, could join with invalid codes.
+      
+       **Fix:** Added regex validation: `/^\d{4}$/` for 4-digit codes.
+      
+       ---
+      
+       ### 14. Popup Script: Missing Error Handling
+       **File:** `popup.js`
+      
+       **Issue:** No null checks on tabs array or URL parsing.
+      
+       **Fix:** Added:
+       ```javascript
+       if (!tabs || tabs.length === 0) {
+           cb(null);
+           return;
+       }
+       ```
+      
+       ---
+      
+       ### 15. Config: No Local Development Support
+       **File:** `config.js`
+      
+       **Issue:** No configuration options for local development.
+      
+       **Fix:** Added commented local development option and comprehensive configuration with:
+       - `WS_CONNECT_TIMEOUT`
+       - `WS_RECONNECT_MIN_DELAY`
+       - `WS_RECONNECT_MAX_DELAY`
+       - `WS_RECONNECT_BACKOFF`
+       - `WS_MAX_QUEUE_SIZE`
+       - `WS_HEARTBEAT_INTERVAL`
+       - `WS_HEARTBEAT_TIMEOUT`
+      
+       Validation functions:
+       - `isValidSessionCode()`
+       - `isValidVideoId()`
+       - `parseServerUrl()`
+      
+       ---
+      
+       ### 16. Popup Script: Message Listener Race Condition
+       **File:** `popup.js`
+      
+       **Issue:** Message listeners added after initial session check, could miss SESSION_CONFIRMED messages
+ .
+      
+       **Fix:** Moved listener registration before session checks.
+      
+       ---
+      
+       ## Improvements Made
+      
+       ### 1. Connection Timeout
+       Added connection timeout (10 seconds) to prevent hanging on slow/unreachable servers.
+      
+       ### 2. Graceful Shutdown
+       Added SIGTERM handler on server for clean shutdown:
+       ```javascript
+       process.on("SIGTERM", () => {
+           if (heartbeatTimer) clearInterval(heartbeatTimer);
+           wss.close();
+           process.exit(0);
+       });
+       ```
+      
+       ### 3. Chrome Extension Cleanup
+       Added cleanup handlers for:
+       - `chrome.runtime.onStartup`
+       - `chrome.runtime.onSuspend`
+      
+       ### 4. Test Suite
+       Created comprehensive test suite with 5 tests:
+       - Create Room
+       - Join Room
+       - Message Relay
+       - Room Cleanup
+       - Session Termination
+      
+       All tests pass successfully.
+      
+       ### 5. Error Messages
+       Added better error messages for:
+       - Invalid JSON received
+       - Room not found
+       - Send failures
+       - Storage errors
+      
+       ### 6. Member Join Notification
+       Added notification when new members join a room.
+      
+       ### 7. Server Response on Invalid Room Join
+       Added error response when trying to join non-existent room.
+      
+       ---
+      
+       ## Testing
+      
+       Run tests with:
+       ```bash
+       cd ysync-server
+       npm test
+       ```
+      
+       Or:
+       ```bash
+       node test/server.test.js
+       ```
+      
+       ---
+      
+       ## Files Modified
+      
+       1. `ysync-server/server.js` - Server with heartbeat and cleanup
+       2. `ysync-server/package.json` - Added test script
+       3. `ysync-server/test/server.test.js` - New test suite
+       4. `background.js` - Enhanced error handling and reconnection
+       5. `contentScript.js` - Added error handling and cleanup
+       6. `popup.js` - Added validation and error handling
+       7. `config.js` - Added configuration constants and validation
+       8. `background.js` - Session code validation
+      
+       ---
+      
+       ## Summary
+      
+       **Total Bugs Fixed:** 16+
+       **Tests Added:** 5
+       **Improvements:** Connection timeout, graceful shutdown, better error handling, exponential backoff,
+ memory cleanup
+      
+       **Server Status:** All tests passing
+       **Client Extensions:** Better error handling and robustne

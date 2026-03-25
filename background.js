@@ -1,13 +1,15 @@
+/* ---------- YSync Background Script ---------- */
 importScripts("config.js");
 
 let socket = null;
 let activeSession = null;
 let messageQueue = [];
 let sessionLoaded = false;
+let heartbeatTimer = null;
 
+// Reconnection state
+let reconnectAttempts = 0;
 let reconnectTimer = null;
-let lastAliveReceived = Date.now();
-
 
 // ---------------- LOAD STORED SESSION ----------------
 chrome.storage.local.get("activeSession", data => {
@@ -21,152 +23,232 @@ chrome.storage.local.get("activeSession", data => {
 });
 
 
-// ---------------- WATCHDOG ----------------
-setInterval(() => {
+// ---------------- WATCHDOG (HEARTBEAT CHECK) ----------------
+function startHeartbeatWatchdog() {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
 
-    if (!socket) return;
-    if (socket.readyState !== WebSocket.OPEN) return;
+    heartbeatTimer = setInterval(() => {
 
-    if (Date.now() - lastAliveReceived > 65000) { // Safe vs 30s heartbeat
-        console.log("[YSync] Heartbeat timeout → reconnecting");
-        socket.close();
-    }
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
-}, 5000);
+        if (Date.now() - lastAliveReceived > WS_HEARTBEAT_TIMEOUT) {
+            console.log("[YSync] Heartbeat timeout → reconnecting");
+            socket.close();
+        }
+
+    }, 5000); // Check every 5 seconds
+}
 
 
 // ---------------- QUEUE ----------------
 function flushQueue() {
 
-    while (
-        messageQueue.length > 0 &&
-        socket &&
-        socket.readyState === WebSocket.OPEN
-    ) {
-        socket.send(JSON.stringify(messageQueue.shift()));
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+    while (messageQueue.length > 0) {
+        // Limit queue size to prevent memory issues
+        if (messageQueue.length > WS_MAX_QUEUE_SIZE) {
+            console.log("[YSync] Message queue full, dropping oldest");
+            messageQueue.shift();
+            continue;
+        }
+
+        const msg = messageQueue.shift();
+        try {
+            socket.send(JSON.stringify(msg));
+        } catch (e) {
+            console.log("[YSync] Queue send error:", e.message);
+            messageQueue.unshift(msg); // Put back for retry
+            break;
+        }
     }
 }
 
 
-// ---------------- RECONNECT ----------------
-function scheduleReconnect() {
+// ---------------- RECONNECT WITH EXPONENTIAL BACKOFF ----------------
+function calculateBackoffDelay() {
+    const delay = WS_RECONNECT_MIN_DELAY * Math.pow(WS_RECONNECT_BACKOFF, reconnectAttempts);
+    return Math.min(delay, WS_RECONNECT_MAX_DELAY);
+}
 
+function scheduleReconnect() {
     if (reconnectTimer) return;
+
+    const delay = calculateBackoffDelay();
+    reconnectAttempts++;
+
+    console.log(`[YSync] Scheduling reconnection in ${delay}ms (attempt ${reconnectAttempts})`);
 
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connect();
-    }, 2000);
+    }, delay);
 }
 
 
 // ---------------- CONNECT ----------------
+let lastAliveReceived = Date.now();
+
 function connect() {
 
+    // Don't reconnect if socket is already open
     if (socket && socket.readyState === WebSocket.OPEN) return;
+
+    // Clear any existing reconnect timer
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
 
     console.log("[YSync] Connecting...");
 
-    socket = new WebSocket(YSYNC_SERVER);
+    try {
+        socket = new WebSocket(YSYNC_SERVER);
 
-    socket.onopen = () => {
+        // Set connection timeout
+        const connectTimeout = setTimeout(() => {
+            if (socket && socket.readyState === WebSocket.CONNECTING) {
+                console.log("[YSync] Connection timeout");
+                socket.close();
+            }
+        }, WS_CONNECT_TIMEOUT);
 
-        console.log("[YSync] Socket connected");
+        socket.onopen = () => {
+            clearTimeout(connectTimeout);
+            reconnectAttempts = 0; // Reset on successful connection
 
-        lastAliveReceived = Date.now();
-        flushQueue();
+            console.log("[YSync] Socket connected");
 
-        if (activeSession) {
-            console.log("[YSync] Rejoining session:", activeSession.code);
-
-            socket.send(JSON.stringify({
-                type: "JOIN_ROOM",
-                room: activeSession.code,
-                videoId: activeSession.videoId
-            }));
-        }
-    };
-
-    socket.onmessage = event => {
-
-        const msg = JSON.parse(event.data);
-
-        console.log("[YSync] Server ->", msg.type);
-
-        if (msg.type === "ALIVE") {
             lastAliveReceived = Date.now();
-        }
+            flushQueue();
+            startHeartbeatWatchdog();
 
-        // ---------------- SESSION CONFIRMED ----------------
-        if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
+            if (activeSession) {
+                console.log("[YSync] Rejoining session:", activeSession.code);
 
-            activeSession = {
-                code: msg.room,
-                videoId: msg.videoId
-            };
+                try {
+                    socket.send(JSON.stringify({
+                        type: "JOIN_ROOM",
+                        room: activeSession.code,
+                        videoId: activeSession.videoId
+                    }));
+                } catch (e) {
+                    console.log("[YSync] Rejoin send error:", e.message);
+                }
+            }
+        };
 
-            chrome.storage.local.set({ activeSession });
+        socket.onmessage = event => {
 
-            // Notify popup
-            chrome.runtime.sendMessage({
-                type: "SESSION_CONFIRMED",
-                code: msg.room
-            });
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch (e) {
+                console.log("[YSync] Invalid message received");
+                return;
+            }
 
-            // 🔥 Notify ALL content scripts
-            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
-                tabs.forEach(tab => {
-                    chrome.tabs.sendMessage(tab.id, { type: "SESSION_CONFIRMED" });
+            console.log("[YSync] Server ->", msg.type);
+
+            if (msg.type === "ALIVE") {
+                lastAliveReceived = Date.now();
+                // Send pong response
+                try {
+                    socket.send(JSON.stringify({ type: "ALIVE" }));
+                } catch (e) {
+                    console.log("[YSync] Pong send error:", e.message);
+                }
+            }
+
+            // ---------------- SESSION CONFIRMED ----------------
+            if (msg.type === "ROOM_CREATED" || msg.type === "JOINED") {
+
+                activeSession = {
+                    code: msg.room,
+                    videoId: msg.videoId
+                };
+
+                chrome.storage.local.set({ activeSession }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.log("[YSync] Storage error:", chrome.runtime.lastError.message);
+                    }
                 });
-            });
 
-            // 🔥 Request sync snapshot
-            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
-                tabs.forEach(tab => {
-                    chrome.tabs.sendMessage(tab.id, { type: "REQUEST_SYNC_STATE" });
+                chrome.runtime.sendMessage({
+                    type: "SESSION_CONFIRMED",
+                    code: msg.room
+                }, () => {});
+
+                chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                    tabs.forEach(tab => {
+                        try {
+                            chrome.tabs.sendMessage(tab.id, { type: "SESSION_CONFIRMED" });
+                        } catch (e) {}
+                    });
                 });
-            });
 
-            return;
-        }
-
-
-        // ---------------- SESSION TERMINATED ----------------
-        if (msg.type === "SESSION_TERMINATED") {
-
-            activeSession = null;
-            chrome.storage.local.remove("activeSession");
-
-            chrome.runtime.sendMessage({
-                type: "SESSION_TERMINATED"
-            });
-
-            // 🔥 Notify content scripts
-            chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
-                tabs.forEach(tab => {
-                    chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+                chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                    tabs.forEach(tab => {
+                        try {
+                            chrome.tabs.sendMessage(tab.id, { type: "REQUEST_SYNC_STATE" });
+                        } catch (e) {}
+                    });
                 });
-            });
 
-            return;
-        }
+                return;
+            }
 
+            // ---------------- SESSION TERMINATED ----------------
+            if (msg.type === "SESSION_TERMINATED" || msg.type === "ROOM_DESTROYED") {
 
-        // ---------------- RELAY SYNC EVENTS ----------------
-        chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
-            tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, msg));
-        });
-    };
+                activeSession = null;
+                chrome.storage.local.remove("activeSession");
 
-    socket.onclose = () => {
-        console.log("[YSync] Socket closed");
+                chrome.runtime.sendMessage({
+                    type: "SESSION_TERMINATED"
+                }, () => {});
+
+                chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                    tabs.forEach(tab => {
+                        try {
+                            chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+                        } catch (e) {}
+                    });
+                });
+
+                return;
+            }
+
+            // ---------------- RELAY SYNC EVENTS ----------------
+            try {
+                chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
+                    tabs.forEach(tab => {
+                        try {
+                            chrome.tabs.sendMessage(tab.id, msg);
+                        } catch (e) {}
+                    });
+                });
+            } catch (e) {
+                console.log("[YSync] Relay error:", e.message);
+            }
+        };
+
+        socket.onclose = event => {
+            clearTimeout(connectTimeout);
+            console.log(`[YSync] Socket closed (code: ${event.code})`);
+            scheduleReconnect();
+        };
+
+        socket.onerror = error => {
+            clearTimeout(connectTimeout);
+            console.log("[YSync] Socket error:", error.message);
+            socket.close();
+        };
+
+    } catch (e) {
+        console.log("[YSync] Connect exception:", e.message);
         scheduleReconnect();
-    };
-
-    socket.onerror = () => {
-        console.log("[YSync] Socket error");
-        socket.close();
-    };
+    }
 }
 
 
@@ -176,11 +258,21 @@ function send(payload) {
     connect();
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
+        // Check queue size before adding
+        if (messageQueue.length >= WS_MAX_QUEUE_SIZE) {
+            console.log("[YSync] Message queue full, dropping message");
+            return;
+        }
         messageQueue.push(payload);
         return;
     }
 
-    socket.send(JSON.stringify(payload));
+    try {
+        socket.send(JSON.stringify(payload));
+    } catch (e) {
+        console.log("[YSync] Send exception:", e.message);
+        messageQueue.push(payload);
+    }
 }
 
 
@@ -205,6 +297,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // JOIN SESSION
     if (msg.type === "JOIN_SESSION") {
 
+        // Validate session code
+        if (!isValidSessionCode(msg.code)) {
+            sendResponse({ error: "Invalid session code format" });
+            return true;
+        }
+
         send({
             type: "JOIN_ROOM",
             room: msg.code,
@@ -219,6 +317,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         console.log("[YSync] Leaving session");
 
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            send({
+                type: "LEAVE_ROOM",
+                room: activeSession ? activeSession.code : null
+            });
+        }
+
         activeSession = null;
         chrome.storage.local.remove("activeSession");
 
@@ -227,10 +332,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             socket = null;
         }
 
-        // 🔥 Notify content scripts
         chrome.tabs.query({ url: "*://*.youtube.com/*" }, tabs => {
             tabs.forEach(tab => {
-                chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+                try {
+                    chrome.tabs.sendMessage(tab.id, { type: "SESSION_TERMINATED" });
+                } catch (e) {}
             });
         });
 
@@ -241,8 +347,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "GET_SESSION") {
 
         const wait = () => {
-            if (sessionLoaded) sendResponse(activeSession);
-            else setTimeout(wait, 50);
+            if (sessionLoaded) {
+                sendResponse(activeSession);
+            } else {
+                setTimeout(wait, 100);
+            }
         };
 
         wait();
@@ -256,4 +365,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     ) {
         send(msg);
     }
+});
+
+// ---------------- CLEANUP ON UNLOAD ----------------
+chrome.runtime.onStartup.addListener(() => {
+    console.log("[YSync] Browser started, initializing...");
+    connect();
+});
+
+chrome.runtime.onSuspend.addListener(() => {
+    console.log("[YSync] Browser suspended, cleaning up...");
+    if (socket) {
+        socket.close();
+        socket = null;
+    }
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
 });

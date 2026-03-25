@@ -1,29 +1,54 @@
+/* ---------- GLOBAL FIX ---------- */
+* {
+  box-sizing: border-box;
+}
+
+/* ---------- YSync Content Script ---------- */
+
 console.log("[YSync] Content loaded");
 
 let lastVideo = null;
 let lastRemoteAction = 0;
+let heartbeatTimer = null;
+let inSession = false;
 
 const SUPPRESSION_WINDOW = 250;
+const VIDEO_WATCH_INTERVAL = 1000;
+const HEARTBEAT_INTERVAL = 30000;
 
-let inSession = false;   // 🔥 NEW SESSION FLAG
-
+// ---------------- ERROR HANDLING WRAPPER ----------------
+function safeSend(payload) {
+    try {
+        chrome.runtime.sendMessage(payload, () => {
+            if (chrome.runtime.lastError) {
+                console.log("[YSync] Send error:", chrome.runtime.lastError.message);
+            }
+        });
+        return true;
+    } catch (e) {
+        console.log("[YSync] Exception in send:", e.message);
+        return false;
+    }
+}
 
 // ---------------- SESSION STATE TRACKING ----------------
-chrome.runtime.onMessage.addListener(msg => {
-
-    if (msg.type === "SESSION_CONFIRMED") {
+function setSessionState(connected) {
+    const wasInSession = inSession;
+    inSession = connected;
+    if (!wasInSession && inSession) {
         console.log("[YSync] Session confirmed → enabling sync send");
-        inSession = true;
-        return;
-    }
-
-    if (msg.type === "SESSION_TERMINATED") {
+    } else if (wasInSession && !inSession) {
         console.log("[YSync] Session terminated → disabling sync send");
-        inSession = false;
-        return;
+        stopHeartbeat();
     }
-});
+}
 
+function stopHeartbeat() {
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+}
 
 // ---------------- GET VIDEO ----------------
 function getVideo() {
@@ -32,7 +57,8 @@ function getVideo() {
 
 function getVideoId() {
     try {
-        return new URL(location.href).searchParams.get("v");
+        const url = new URL(location.href);
+        return url.searchParams.get("v");
     } catch {
         return null;
     }
@@ -42,7 +68,6 @@ function shouldSuppress() {
     return Date.now() - lastRemoteAction < SUPPRESSION_WINDOW;
 }
 
-
 // ---------------- SAFE SEND WRAPPER ----------------
 function sendIfSession(payload, label) {
 
@@ -51,11 +76,13 @@ function sendIfSession(payload, label) {
         return;
     }
 
+    if (!safeSend(payload)) {
+        console.log(`[YSync] ${label} failed to send`);
+        return;
+    }
+
     console.log(`[YSync] ${label} sent`);
-
-    chrome.runtime.sendMessage(payload);
 }
-
 
 // ---------------- ATTACH LISTENERS ----------------
 function attach(video) {
@@ -99,17 +126,19 @@ function attach(video) {
     });
 
     // ---------------- HEARTBEAT (30s) ----------------
-    setInterval(() => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
 
-        sendIfSession({
-            type: "ALIVE",
-            videoId: getVideoId(),
-            time: video.currentTime
-        }, "ALIVE");
+        if (inSession) {
+            sendIfSession({
+                type: "ALIVE",
+                videoId: getVideoId(),
+                time: video.currentTime
+            }, "ALIVE");
+        }
 
-    }, 30000);
+    }, HEARTBEAT_INTERVAL);
 }
-
 
 // ---------------- WATCH VIDEO ----------------
 function watchVideo() {
@@ -123,37 +152,53 @@ function watchVideo() {
 
             console.log("[YSync] Video changed → reattaching");
 
+            if (lastVideo) {
+                // Cleanup old video listeners
+                const oldVideo = lastVideo;
+                if (oldVideo.__ysyncAttached) {
+                    delete oldVideo.__ysyncAttached;
+                }
+            }
+
             lastVideo = video;
             attach(video);
         }
 
-    }, 1000);
+    }, VIDEO_WATCH_INTERVAL);
 }
 
-
 // ---------------- MESSAGE HANDLER ----------------
-chrome.runtime.onMessage.addListener(msg => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     const video = getVideo();
-    if (!video) return;
+    if (!video) return false;
 
-    if (msg.videoId && msg.videoId !== getVideoId()) return;
+    // Validate videoId if present (prevents cross-video interference)
+    const currentVideoId = getVideoId();
+    if (msg.videoId && msg.videoId !== currentVideoId) {
+        console.log("[YSync] Message ignored: videoId mismatch");
+        return false;
+    }
 
     // REQUEST SYNC SNAPSHOT
     if (msg.type === "REQUEST_SYNC_STATE") {
 
-        if (!inSession) return;
+        if (!inSession) return false;
 
         console.log("[YSync] REQUEST_SYNC_STATE received → sending snapshot");
 
         chrome.runtime.sendMessage({
             type: "SYNC_STATE",
-            videoId: getVideoId(),
+            videoId: currentVideoId,
             time: video.currentTime,
             paused: video.paused
+        }, () => {
+            if (chrome.runtime.lastError) {
+                console.log("[YSync] Sync state send error:", chrome.runtime.lastError.message);
+            }
         });
 
-        return;
+        return true; // Keep sendResponse valid
     }
 
     // APPLY SNAPSHOT
@@ -163,12 +208,16 @@ chrome.runtime.onMessage.addListener(msg => {
 
         lastRemoteAction = Date.now();
 
-        video.currentTime = msg.time;
+        try {
+            video.currentTime = msg.time;
 
-        if (msg.paused) video.pause();
-        else video.play();
+            if (msg.paused) video.pause();
+            else video.play();
+        } catch (e) {
+            console.log("[YSync] Error applying sync state:", e.message);
+        }
 
-        return;
+        return true;
     }
 
     lastRemoteAction = Date.now();
@@ -177,29 +226,69 @@ chrome.runtime.onMessage.addListener(msg => {
 
         console.log("[YSync] PLAY received");
 
-        video.currentTime = msg.time;
-        video.play();
+        try {
+            video.currentTime = msg.time;
+            video.play();
+        } catch (e) {
+            console.log("[YSync] Play error:", e.message);
+        }
     }
 
     if (msg.type === "PAUSE") {
 
         console.log("[YSync] PAUSE received");
 
-        video.currentTime = msg.time;
-        video.pause();
+        try {
+            video.currentTime = msg.time;
+            video.pause();
+        } catch (e) {
+            console.log("[YSync] Pause error:", e.message);
+        }
     }
 
     if (msg.type === "SEEK") {
 
         console.log("[YSync] SEEK received");
 
-        video.currentTime = msg.time;
+        try {
+            video.currentTime = msg.time;
+        } catch (e) {
+            console.log("[YSync] Seek error:", e.message);
+        }
     }
 
     if (msg.type === "ALIVE") {
         console.log("[YSync] ALIVE received");
     }
+
+    return false;
 });
 
+// ---------------- SESSION STATE LISTENER ----------------
+chrome.runtime.onMessage.addListener(msg => {
 
-watchVideo();
+    if (msg.type === "SESSION_CONFIRMED") {
+        setSessionState(true);
+        // Reattach to current video if session just started
+        const video = getVideo();
+        if (video) attach(video);
+    }
+
+    if (msg.type === "SESSION_TERMINATED") {
+        setSessionState(false);
+    }
+
+    if (msg.type === "SESSION_ERROR") {
+        console.log("[YSync] Session error:", msg.error);
+        setSessionState(false);
+    }
+});
+
+// ---------------- INITIALIZATION ----------------
+function initialize() {
+    console.log("[YSync] Initializing...");
+    watchVideo();
+}
+
+// Run on script load
+initialize();

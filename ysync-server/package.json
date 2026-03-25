@@ -1,13 +1,20 @@
 {
   "name": "ysync-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "YSync - YouTube Watch Together Server",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/server.test.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "websocket",
+    "youtube",
+    "sync",
+    "video"
+  ],
+  "author": "CFAT",
   "license": "ISC",
   "dependencies": {
     "dotenv": "^17.2.4",
